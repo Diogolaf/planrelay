@@ -76,6 +76,14 @@ test('readJson returns the fallback for missing or corrupt files', () => {
   assert.equal(readJson(path.join(dir, 'empty.json'), 'fb'), 'fb');
 });
 
+test('readJson ignores one leading UTF-8 BOM', () => {
+  const dir = tempDir();
+  fs.writeFileSync(path.join(dir, 'bom.json'), '﻿{"n":1}');
+  assert.deepEqual(readJson(path.join(dir, 'bom.json'), 'fb'), { n: 1 });
+  fs.writeFileSync(path.join(dir, 'two.json'), '﻿﻿{"n":1}'); // only one is stripped
+  assert.equal(readJson(path.join(dir, 'two.json'), 'fb'), 'fb');
+});
+
 test('readJson throws errors other than a missing file', () => {
   const dir = tempDir(); // a folder cannot be read as a file
   assert.throws(() => readJson(dir, 'fb'), { code: 'EISDIR' });

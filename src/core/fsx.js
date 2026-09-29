@@ -43,6 +43,7 @@ export function ensureDir(dir) {
 
 /**
  * Parsed JSON, or the fallback when the file does not exist or is not valid JSON.
+ * A leading UTF-8 BOM (as some Windows editors write) is ignored.
  * Any other error (permissions, a folder at that path, ...) is thrown.
  * @template T @param {string} file @param {T} fallback
  */
@@ -55,7 +56,7 @@ export function readJson(file, fallback) {
     throw err;
   }
   try {
-    return JSON.parse(text);
+    return JSON.parse(text.replace(/^﻿/, ''));
   } catch (err) {
     if (err instanceof SyntaxError) return fallback;
     throw err;
