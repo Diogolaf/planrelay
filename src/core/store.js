@@ -2,7 +2,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { NAME } from '../name.js';
 import { readConfig } from './config.js';
-import { appendLine, fileSize, readJson, readLines, retryWhileBusy, writeFileAtomic, writeJsonAtomic } from './fsx.js';
+import {
+  appendLine, fileSize, isBusyError, readJson, readLines, retryWhileBusy, writeFileAtomic, writeJsonAtomic,
+} from './fsx.js';
 import { withLock } from './mutex.js';
 import { resolveBoard } from './paths.js';
 import { applyEvent, emptyState, isEvent, SCHEMA } from './reduce.js';
@@ -17,7 +19,13 @@ import { applyEvent, emptyState, isEvent, SCHEMA } from './reduce.js';
  * }} Registry
  */
 
+const NEWLINE = 0x0a;
+/** Tries before giving up on a log that keeps growing under the lock (another writer holds it too). */
+const FENCE_ATTEMPTS = 3;
+
 const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+const isPlainObj = (v) => isObj(v) && [Object.prototype, null].includes(Object.getPrototypeOf(v));
+const isId = (v) => Number.isSafeInteger(v) && v >= 1;
 
 /** @param {string} cwd @param {{ home?: string, projectDir?: string, env?: Record<string, string | undefined> }} [opts] */
 export function openBoard(cwd, opts = {}) {
@@ -42,7 +50,9 @@ export function openBoard(cwd, opts = {}) {
 }
 /** @typedef {ReturnType<typeof openBoard>} Board */
 
+/** The message file of a task; throws unless taskId is a whole number of 1 or more. */
 export function messagesFile(board, taskId) {
+  if (!isId(taskId)) throw new TypeError(`${NAME}: a task id is a whole number of 1 or more, not ${String(taskId)}`);
   return path.join(board.files.messagesDir, `${taskId}.jsonl`);
 }
 
@@ -60,17 +70,18 @@ export function readRegistry(board) {
   return /** @type {Registry} */ (reg);
 }
 
-/** The snapshot, if it can be read, has the expected shape and matches the log's size; else null. */
-function currentSnapshot(board) {
+/** The snapshot when it can be read and has the expected shape, else null. Its size is not compared with the log. */
+function readSnapshot(board) {
   let s;
   try {
     s = readJson(board.files.state, null);
   } catch {
-    return null; // unreadable (a folder in its place, permissions): rebuilt from the log like a corrupt one
+    return null; // unreadable (a folder in its place, permissions): replayed like a corrupt one
   }
-  const shaped = isObj(s) && s.schema === SCHEMA && Number.isSafeInteger(s.seq) && Number.isSafeInteger(s.nextId)
+  const ok = isObj(s) && s.schema === SCHEMA && Number.isSafeInteger(s.seq) && Number.isSafeInteger(s.nextId)
+    && Number.isSafeInteger(s.eventsSize) && s.eventsSize >= 0
     && isObj(s.tasks) && Array.isArray(s.recent) && Array.isArray(s.messages);
-  return shaped && s.eventsSize === fileSize(board.files.events) ? s : null;
+  return ok ? /** @type {BoardState} */ (s) : null;
 }
 
 /**
@@ -85,6 +96,79 @@ function applyTracked(state, ev) {
   return target && target.messageCount > countBefore ? m : null;
 }
 
+/** The batch an event belongs to; an event without `tx` and `n` is a batch of its own. Null when malformed. */
+function frameOf(ev) {
+  if (ev.tx === undefined && ev.n === undefined) return { tx: ev.seq, n: 1 };
+  const { tx, n } = ev;
+  const ok = Number.isSafeInteger(tx) && Number.isSafeInteger(n) && tx >= 1 && n >= 1 && ev.seq >= tx && ev.seq - tx < n;
+  return ok ? { tx, n } : null;
+}
+
+/**
+ * Applies the lines of `buf` to `state`, one complete batch at a time.
+ * - A line counts once its newline is written: bytes after the last newline are left alone (a
+ *   write in progress, or cut off by a crash; the next writer terminates such a line before appending).
+ * - Lines that do not parse, are not events, repeat an earlier seq, or belong to a batch whose `n`
+ *   events are not all present on consecutive lines are skipped and reported.
+ * @param {BoardState} state
+ * @param {Buffer} buf
+ * @param {{ atFileStart?: boolean, onMessage?: ((m: any) => void) | null }} [opts]
+ * @returns {{ end: number, bad: number[], orphan: boolean }} end: bytes consumed; bad: 1-based line
+ *   numbers within buf; orphan: some batch continues without its first event (it began before buf)
+ */
+function applyLines(state, buf, { atFileStart = false, onMessage = null } = {}) {
+  const end = buf.lastIndexOf(NEWLINE) + 1;
+  const bom = atFileStart && buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf ? 3 : 0;
+  /** @type {number[]} */
+  const bad = [];
+  let orphan = false;
+  /** @type {{ tx: number, n: number, events: any[], lines: number[], repeated: boolean } | null} */
+  let batch = null;
+  const close = () => {
+    if (batch.repeated) bad.push(...batch.lines);
+    else {
+      for (const ev of batch.events) {
+        const m = applyTracked(state, ev);
+        if (m && onMessage) onMessage(m);
+      }
+    }
+    batch = null;
+  };
+  const lines = end > bom ? buf.toString('utf8', bom, end).split('\n') : [];
+  lines.forEach((line, i) => {
+    if (line.trim() === '') return;
+    let ev;
+    try {
+      ev = JSON.parse(line);
+    } catch {
+      ev = undefined; // malformed, or cut off by a crash mid-write
+    }
+    const frame = isEvent(ev) ? frameOf(ev) : null;
+    if (batch) {
+      if (frame && frame.tx === batch.tx && frame.n === batch.n && ev.seq === batch.tx + batch.events.length) {
+        batch.events.push(ev);
+        batch.lines.push(i + 1);
+        if (batch.events.length === batch.n) close();
+        return;
+      }
+      bad.push(...batch.lines); // cut short: the rest of the batch never arrived
+      batch = null;
+    }
+    if (!frame) {
+      bad.push(i + 1); // not an event (for example `null`), or a malformed batch marker
+    } else if (ev.seq !== frame.tx) {
+      bad.push(i + 1); // a batch continued without its first event
+      orphan = true;
+    } else {
+      // A repeated seq condemns the whole batch; its lines are still read, so they do not look orphaned.
+      batch = { tx: frame.tx, n: frame.n, events: [ev], lines: [i + 1], repeated: ev.seq <= state.seq };
+      if (batch.n === 1) close();
+    }
+  });
+  if (batch) bad.push(...batch.lines); // incomplete at the end: a write cut short, or still being written
+  return { end, bad, orphan };
+}
+
 /** The log's bytes, or an empty buffer when it does not exist. Any other error is thrown. */
 function readLog(file) {
   try {
@@ -96,69 +180,129 @@ function readLog(file) {
 }
 
 /**
- * Replays the whole log in memory. Lines that do not parse, are not events, or repeat an earlier
- * seq are skipped and reported by their 1-based line number in the file.
+ * Replays the whole log in memory. Skipped lines are reported by their 1-based line number in the
+ * file. `messages: false` skips collecting the per-task messages (readers only need the state).
+ * @param {Board} board @param {{ messages?: boolean }} [opts]
  */
-export function replay(board) {
+export function replay(board, opts = {}) {
   const state = emptyState();
-  /** @type {number[]} */
-  const bad = [];
   /** @type {Map<number, any[]>} */
   const messages = new Map();
-  const bytes = readLog(board.files.events);
-  bytes.toString('utf8').replace(/^﻿/, '').split('\n').forEach((line, i) => {
-    if (line.trim() === '') return;
-    let ev;
-    try {
-      ev = JSON.parse(line);
-    } catch {
-      bad.push(i + 1); // malformed, or cut off by a crash mid-write
-      return;
-    }
-    if (!isEvent(ev) || ev.seq <= state.seq) {
-      bad.push(i + 1); // parses, but is not an event (for example `null`), or repeats an earlier seq
-      return;
-    }
-    const m = applyTracked(state, ev);
-    if (m) {
-      if (!messages.has(m.taskId)) messages.set(m.taskId, []);
-      messages.get(m.taskId).push(m);
-    }
-  });
-  // The size of the bytes replayed, not a second stat: an append in between must not be counted as seen.
-  state.eventsSize = bytes.length;
+  const onMessage = opts.messages === false ? null : (m) => {
+    if (!messages.has(m.taskId)) messages.set(m.taskId, []);
+    messages.get(m.taskId).push(m);
+  };
+  const { end, bad } = applyLines(state, readLog(board.files.events), { atFileStart: true, onMessage });
+  state.eventsSize = end; // the bytes replayed, never a second size check
   return { state, bad, messages };
 }
 
-/** Current state without locking; replays in memory when the snapshot is missing, corrupt or behind. */
-export function readState(board) {
-  return currentSnapshot(board) ?? replay(board).state;
+/**
+ * The snapshot brought up to date by applying only the log's tail, or null when that cannot be
+ * trusted: the log shrank, the snapshot's size is not a line boundary, or a batch straddles it.
+ * @param {Board} board @param {BoardState} s
+ */
+function catchUp(board, s) {
+  let fd;
+  try {
+    fd = fs.openSync(board.files.events, 'r');
+  } catch {
+    return s.eventsSize === 0 ? s : null;
+  }
+  try {
+    const size = fs.fstatSync(fd).size;
+    if (size === s.eventsSize) return s;
+    if (size < s.eventsSize) return null;
+    // One byte before the tail too: it must be the newline that ends the snapshot's last line.
+    const from = s.eventsSize === 0 ? 0 : s.eventsSize - 1;
+    const buf = Buffer.alloc(size - from);
+    for (let got = 0; got < buf.length;) {
+      const n = fs.readSync(fd, buf, got, buf.length - got, from + got);
+      if (n === 0) return null; // shrank meanwhile
+      got += n;
+    }
+    if (s.eventsSize > 0 && buf[0] !== NEWLINE) return null;
+    const { end, orphan } = applyLines(s, s.eventsSize > 0 ? buf.subarray(1) : buf, { atFileStart: s.eventsSize === 0 });
+    if (orphan) return null;
+    s.eventsSize += end;
+    return s;
+  } finally {
+    fs.closeSync(fd);
+  }
 }
 
-function listDir(dir) {
+/**
+ * Current state without locking. A usable snapshot is caught up with the log's tail in memory;
+ * the whole log is replayed only when the snapshot is missing, corrupt or cannot be caught up.
+ * The next write saves the result under the lock.
+ */
+export function readState(board) {
+  const s = readSnapshot(board);
+  let caught = null;
+  if (s) {
+    try {
+      caught = catchUp(board, s);
+    } catch {
+      caught = null;
+    }
+  }
+  return caught ?? replay(board, { messages: false }).state;
+}
+
+function listDir(dir, opts) {
   try {
-    return fs.readdirSync(dir);
+    return fs.readdirSync(dir, opts);
   } catch (err) {
     if (/** @type {any} */ (err).code === 'ENOENT') return [];
     throw err;
   }
 }
 
-function rebuildUnlocked(board) {
+const removeQuietly = (file) => retryWhileBusy(() => fs.rmSync(file, { recursive: true, force: true }));
+
+/**
+ * Replays the log and rewrites every derived file from it: message files first, the snapshot last
+ * and only when all of them were written, since a current snapshot vouches for them.
+ * Strict (repair) throws at the first failure. Otherwise (inside transact) each failure is logged
+ * and reported in `degraded`, and the write goes on: a derived file that cannot be written never
+ * makes the board read-only, and the stale snapshot makes the next write try again. After a
+ * Windows busy error, which has already waited out its retries, the rest of that kind is skipped.
+ * @param {Board} board @param {boolean} strict
+ */
+function rebuild(board, strict) {
   const { state, bad, messages } = replay(board);
+  /** @type {Set<string>} */
+  const degraded = new Set();
+  /** Kinds given up on: a Windows busy error has already waited out its retries (about 2 s) once. */
+  const given = new Set();
+  const attempt = (kind, what, f) => {
+    if (given.has(kind)) return;
+    try {
+      f();
+    } catch (err) {
+      if (strict) throw err;
+      logError(board, `rebuild ${what}`, err);
+      degraded.add(kind);
+      if (isBusyError(err)) given.add(kind); // the other files would likely wait as long: keep the write fast
+    }
+  };
   const dir = board.files.messagesDir;
   // Files are replaced one by one instead of deleting the folder, so a reader never finds a task's
   // file missing. Anything else there (tasks without messages, leftover temp files) is removed.
-  const keep = new Set([...messages.keys()].map((taskId) => path.basename(messagesFile(board, taskId))));
-  for (const name of listDir(dir)) {
-    if (!keep.has(name)) retryWhileBusy(() => fs.rmSync(path.join(dir, name), { recursive: true, force: true }));
+  const keep = new Set([...messages.keys()].map((taskId) => `${taskId}.jsonl`));
+  /** @type {string[]} */
+  let names = [];
+  attempt('messages', 'state/messages', () => { names = listDir(dir); });
+  for (const name of names) {
+    if (!keep.has(name)) attempt('messages', `state/messages/${name}`, () => removeQuietly(path.join(dir, name)));
   }
   for (const [taskId, list] of messages) {
-    writeFileAtomic(messagesFile(board, taskId), list.map((m) => JSON.stringify(m)).join('\n') + '\n');
+    attempt('messages', `state/messages/${taskId}.jsonl`, () =>
+      writeFileAtomic(messagesFile(board, taskId), list.map((m) => JSON.stringify(m)).join('\n') + '\n'));
   }
-  // Written last: a current snapshot means the message files are complete.
-  writeJsonAtomic(board.files.state, state, { pretty: false });
-  return { state, bad };
+  if (degraded.size) degraded.add('snapshot'); // not written: it would vouch for incomplete message files
+  else attempt('snapshot', 'state/board.json', () => writeJsonAtomic(board.files.state, state, { pretty: false }));
+  return { state, bad, degraded: [...degraded] };
 }
 
 /**
@@ -178,91 +322,185 @@ function locked(board, fn, timeoutMs) {
   }
 }
 
-/** Rebuilds every snapshot from events.jsonl (`agentboard repair`). */
-export function repair(board) {
-  return locked(board, () => rebuildUnlocked(board));
+/** Removes temp files left by writers that crashed between writing and renaming (the lock is held). */
+function removeTempFiles(board) {
+  for (const dir of [board.dir, path.dirname(board.files.state)]) {
+    for (const entry of listDir(dir, { withFileTypes: true })) {
+      if (entry.isFile() && entry.name.endsWith('.tmp')) removeQuietly(path.join(dir, entry.name));
+    }
+  }
 }
 
+/**
+ * Rebuilds every snapshot from events.jsonl (`agentboard repair`). Strict: a derived file that
+ * cannot be written is an error. Returns the rebuilt state and the skipped lines.
+ */
+export function repair(board) {
+  return locked(board, () => {
+    ensureNewlineAtEnd(board.files.events);
+    removeTempFiles(board);
+    const { state, bad } = rebuild(board, true);
+    return { state, bad };
+  });
+}
+
+/** Ends the file with a newline if it does not, so a line cut off by a crash stays on its own. */
 function ensureNewlineAtEnd(file) {
   let fd;
   try {
     fd = fs.openSync(file, 'r');
   } catch {
-    return;
+    return; // missing (nothing to end), or unusable (the append that follows reports it)
   }
   try {
     const size = fs.fstatSync(fd).size;
     if (size === 0) return;
     const last = Buffer.alloc(1);
     fs.readSync(fd, last, 0, 1, size - 1);
-    if (last[0] !== 0x0a) fs.appendFileSync(file, '\n');
+    if (last[0] !== NEWLINE) fs.appendFileSync(file, '\n');
   } finally {
     fs.closeSync(fd);
   }
 }
 
-function stamp(e, seq, now) {
-  const ev = { seq, at: now, type: e.type, actor: e.actor, data: e.data };
+function stamp(e, seq, tx, n, now) {
+  const ev = { seq, tx, n, at: now, type: e.type, actor: e.actor, data: e.data };
   const m = e.type === 'message.posted' && isObj(e.data) ? e.data.message : null;
   if (isObj(m)) ev.data = { ...e.data, message: { ...m, id: `m${seq}`, at: now } };
   return ev;
 }
 
+/** Runs fn on the state and a fresh registry, and checks and stamps what it returns. Writes nothing. */
+function prepare(board, state, fn, now) {
+  const ret = fn(state, readRegistry(board), now);
+  if (typeof ret?.then === 'function') {
+    try { ret.then(undefined, () => {}); } catch { /* a broken thenable */ } // no second crash on a later rejection
+    throw new TypeError(`${NAME}: transact fn must be synchronous; it returned a promise, so nothing was written`);
+  }
+  const out = ret ?? {};
+  if (!isObj(out)) throw new TypeError(`${NAME}: transact fn must return an object or nothing; nothing was written`);
+  const list = out.events ?? [];
+  if (!Array.isArray(list)) throw new TypeError(`${NAME}: transact events must be an array; nothing was written`);
+  if (out.registry != null && !isPlainObj(out.registry)) {
+    throw new TypeError(`${NAME}: the registry returned to transact must be a plain object; nothing was written`);
+  }
+  const tx = state.seq + 1;
+  const events = list.map((e, i) => {
+    if (!isObj(e) || typeof e.type !== 'string') {
+      throw new TypeError(`${NAME}: event ${i} returned to transact has no string type; nothing was written`);
+    }
+    // Round-trip through JSON so what is applied now is exactly what a replay of the log would build.
+    const ev = JSON.parse(JSON.stringify(stamp(e, tx + i, tx, list.length, now)));
+    if (!isEvent(ev)) throw new TypeError(`${NAME}: event ${i} returned to transact is not a valid event; nothing was written`);
+    return ev;
+  });
+  return { out, events };
+}
+
+/** The current snapshot, or a lenient rebuild when it is missing, corrupt or behind the log. */
+function openState(board) {
+  const snap = readSnapshot(board);
+  if (snap && snap.eventsSize === fileSize(board.files.events)) return { state: snap, degraded: [] };
+  const { state, degraded } = rebuild(board, false);
+  return { state, degraded };
+}
+
+/** Appends the whole batch or nothing: a failed append is truncated back to `sizeBefore`. */
+function appendEvents(board, payload, sizeBefore) {
+  const file = board.files.events;
+  try {
+    fs.appendFileSync(file, payload);
+  } catch (err) {
+    try {
+      if (fileSize(file) !== sizeBefore) retryWhileBusy(() => fs.truncateSync(file, sizeBefore));
+    } catch (truncateErr) {
+      logError(board, 'truncating the log after a failed append', truncateErr); // replay ignores the incomplete batch
+    }
+    throw err;
+  }
+}
+
+function appendMessage(board, m) {
+  const file = messagesFile(board, m.taskId);
+  ensureNewlineAtEnd(file);
+  appendLine(file, JSON.stringify(m));
+}
+
 /**
- * The only write path. `fn` sees the current state and registry under the lock and returns what to write.
- * Appending the events is the commit point. Snapshot, message and registry writes that fail after it
- * are logged, not thrown, so a committed write is never reported as failed (and never repeated by a
- * retry); the stale snapshot makes the next transact rebuild the derived files from the log.
+ * The only write path. `fn` sees the current state and registry under the lock and returns what to
+ * write; it may run again (with a fresh registry) if the log changed under the lock, so it must not
+ * have other side effects that matter.
+ *
+ * Order of a write (§6): agent registry, event append (the commit point: the whole batch or
+ * nothing), message files, snapshot. A failure before the append throws and commits nothing (a
+ * registry already written is harmless). A derived file that cannot be written, after the append
+ * or in the rebuild a stale snapshot needs first, is logged and reported in `degraded`
+ * ('messages', 'snapshot'), never thrown, so a committed write is not repeated; the stale snapshot
+ * makes the next write rebuild the derived files.
  * @template R
  * @param {Board} board
  * @param {(state: BoardState, registry: Registry, now: number) => ({ events?: any[], registry?: Registry, result?: R } | void)} fn
  * @param {{ now?: number, timeoutMs?: number }} [opts] timeoutMs bounds the wait for the lock (hooks pass a short one)
- * @returns {{ state: BoardState, events: BoardEvent[], result: R | undefined }}
+ * @returns {{ state: BoardState, events: BoardEvent[], result: R | undefined, degraded: string[] }}
  */
 export function transact(board, fn, opts = {}) {
   return locked(board, () => {
     const now = opts.now ?? Date.now();
-    const state = currentSnapshot(board) ?? rebuildUnlocked(board).state;
-    const registry = readRegistry(board);
-    const ret = fn(state, registry, now);
-    if (typeof ret?.then === 'function') {
-      try { ret.then(undefined, () => {}); } catch { /* a broken thenable */ } // no second crash on a later rejection
-      throw new TypeError(`${NAME}: transact fn must be synchronous; it returned a promise, so nothing was written`);
-    }
-    const out = ret || {};
-    // Round-trip through JSON so what is applied now is exactly what a replay of the log would build.
-    const events = (out.events || []).map((e, i) => {
-      if (!isObj(e) || typeof e.type !== 'string') {
-        throw new TypeError(`${NAME}: event ${i} passed to transact has no string type; nothing was written`);
+    const file = board.files.events;
+    ensureNewlineAtEnd(file);
+    let { state, degraded } = openState(board);
+    let { out, events } = prepare(board, state, fn, now);
+    // Fence: never append on top of events this state has not seen. The log can grow under the lock
+    // only when the lock was taken over as stale while still held; then rebuild and run fn again.
+    for (let attempt = 1; events.length && fileSize(file) !== state.eventsSize; attempt++) {
+      const found = fileSize(file);
+      if (attempt >= FENCE_ATTEMPTS) {
+        throw new Error(`${NAME}: the event log keeps changing while this process holds the lock (${file}); nothing was written`);
       }
-      return JSON.parse(JSON.stringify(stamp(e, state.seq + 1 + i, now)));
-    });
-    // Applied before the append, so nothing is written if applying fails.
+      logError(board, 'fence', new Error(`the event log changed under the lock (${state.eventsSize} bytes seen, ${found} found); rebuilding`));
+      ensureNewlineAtEnd(file);
+      ({ state, degraded } = rebuild(board, false));
+      ({ out, events } = prepare(board, state, fn, now));
+    }
     const accepted = events.map((e) => applyTracked(state, e)).filter(Boolean);
+    if (out.registry != null) writeJsonAtomic(board.files.agents, out.registry, { pretty: false });
     if (events.length) {
-      ensureNewlineAtEnd(board.files.events); // after a crash mid-write, the cut-off line stays on its own
-      fs.appendFileSync(board.files.events, events.map((e) => JSON.stringify(e)).join('\n') + '\n');
-      try {
-        for (const m of accepted) appendLine(messagesFile(board, m.taskId), JSON.stringify(m));
-        state.eventsSize = fileSize(board.files.events);
-        writeJsonAtomic(board.files.state, state, { pretty: false });
-      } catch (err) {
-        logError(board, 'snapshots after commit', err);
+      const sizeBefore = state.eventsSize;
+      if (fileSize(file) !== sizeBefore) {
+        throw new Error(`${NAME}: the event log changed while this process held the lock (${file}); nothing was appended`);
       }
-    }
-    if (out.registry) {
-      try {
-        writeJsonAtomic(board.files.agents, out.registry, { pretty: false });
-      } catch (err) {
-        if (!events.length) throw err; // nothing was committed: the caller sees the failure
-        logError(board, 'registry after commit', err);
+      const payload = events.map((e) => JSON.stringify(e)).join('\n') + '\n';
+      appendEvents(board, payload, sizeBefore); // the commit point
+      state.eventsSize = sizeBefore + Buffer.byteLength(payload);
+      const failed = new Set(degraded);
+      for (const m of accepted) {
+        try {
+          appendMessage(board, m);
+        } catch (err) {
+          logError(board, `messages/${m.taskId}.jsonl after commit`, err);
+          failed.add('messages');
+        }
       }
+      // A failed rebuild left the derived files behind, and failed appends left a message file
+      // incomplete: the snapshot is not written, so the next write rebuilds.
+      if (failed.size) failed.add('snapshot');
+      else {
+        try {
+          writeJsonAtomic(board.files.state, state, { pretty: false });
+        } catch (err) {
+          logError(board, 'snapshot after commit', err);
+          failed.add('snapshot');
+        }
+      }
+      degraded = [...failed];
     }
-    return { state, events, result: out.result };
+    return { state, events, result: out.result, degraded };
   }, opts.timeoutMs);
 }
 
+/** Every message of a task, oldest first; [] for an id that is not a whole number of 1 or more. */
 export function readMessages(board, taskId) {
+  if (!isId(taskId)) return [];
   const out = [];
   for (const line of readLines(messagesFile(board, taskId))) {
     try {
