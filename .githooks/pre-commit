@@ -1,0 +1,8 @@
+#!/bin/sh
+# Leak guard: private terms, commit identity, then secrets.
+node scripts/check-denylist.mjs --staged || exit 1
+if command -v gitleaks >/dev/null 2>&1; then
+  gitleaks git --pre-commit --redact --staged --no-banner || exit 1
+else
+  echo "pre-commit: gitleaks is not installed; CI will still run it. Install it (for example 'winget install gitleaks')." >&2
+fi

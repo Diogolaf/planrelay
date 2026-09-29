@@ -2,3 +2,11 @@ node_modules/
 *.tmp
 .DS_Store
 coverage/
+# Local tool and agent files often contain absolute home paths
+.claude/settings.local.json
+CLAUDE.local.md
+*.log
+.env
+.env.*
+# npm pack output (checked in CI, never committed)
+*.tgz
