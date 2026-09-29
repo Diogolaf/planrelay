@@ -77,15 +77,18 @@ function touch(h, reg, seq, extra = {}) {
 
 /**
  * SessionStart: registers the agent, inherits a claim a gone agent left in this folder (§10) and
- * returns the brief. Its cursor ends after its own inheritance events, so it is never pinged
- * about them. @param {HookCall} h
+ * returns the brief. Only a new session inherits: an agent that was already registered and live
+ * (SessionStart after a compaction keeps the session id) never does, whatever the `source`. Its
+ * cursor ends after its own inheritance events, so it is never pinged about them. @param {HookCall} h
  */
 function sessionStart(h) {
   const { board, id, folder } = h;
   const { state, result } = transact(board, (state, reg) => {
-    const fresh = !isSeq(getAgent(reg, id)?.cursor);
+    const known = getAgent(reg, id);
+    const wasLive = known !== undefined && known.endedAt == null;
+    const fresh = !isSeq(known?.cursor);
     const agent = touch(h, reg, state.seq, { branch: currentBranch(board.gitDir) });
-    const events = inheritClaim(state, reg, id, folder);
+    const events = wasLive ? [] : inheritClaim(state, reg, id, folder);
     // The events returned here take the next sequence numbers.
     const upTo = state.seq + events.length;
     if (fresh) agent.cursor = upTo; // a new agent starts after its own inheritance

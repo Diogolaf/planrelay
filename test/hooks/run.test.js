@@ -63,6 +63,21 @@ test('a new session in the same folder inherits the claim of an ended one', () =
   assert.equal(readState(openBoard(repo)).tasks[1].assignee, 's2');
 });
 
+test('a live session\'s SessionStart (source compact) never takes a gone agent\'s claim', () => {
+  const repo = tempRepo();
+  hook(repo, 'SessionStart', 's1');
+  hook(repo, 'SessionStart', 's2'); // a second agent in the same folder, without a task
+  claimOne(repo);
+  hook(repo, 'SessionEnd', 's1', { reason: 'prompt_input_exit' }, T0 + MIN);
+  // s2 keeps working; Claude Code compacts its conversation and fires SessionStart again, same session id
+  const text = context(hook(repo, 'SessionStart', 's2', { source: 'compact' }, T0 + 2 * MIN));
+  assert.match(text, /No task claimed/);
+  assert.equal(readState(openBoard(repo)).tasks[1].assignee, 's1');
+  // only a new session inherits
+  assert.match(context(hook(repo, 'SessionStart', 's3', { source: 'startup' }, T0 + 3 * MIN)), /Your task: #1 Filter by prep time/);
+  assert.equal(readState(openBoard(repo)).tasks[1].assignee, 's3');
+});
+
 test('/clear: the new session of the same host process continues the task and is not pinged about it', () => {
   const repo = tempRepo();
   hook(repo, 'SessionStart', 's1');
@@ -172,7 +187,7 @@ test('SessionEnd marks the agent gone and leaves its claim with the folder', () 
   const repo = tempRepo();
   hook(repo, 'SessionStart', 's1');
   claimOne(repo);
-  assert.equal(hook(repo, 'SessionEnd', 's1', { reason: 'exit' }, T0 + MIN), '');
+  assert.equal(hook(repo, 'SessionEnd', 's1', { reason: 'logout' }, T0 + MIN), '');
   const board = openBoard(repo);
   assert.equal(readRegistry(board).agents.s1.endedAt, T0 + MIN);
   assert.equal(readState(board).tasks[1].assignee, 's1');
