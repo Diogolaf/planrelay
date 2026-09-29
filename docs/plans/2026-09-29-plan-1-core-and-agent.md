@@ -2967,8 +2967,13 @@ export function completeTask(ctx, input) {
   const unblocked = [];
   for (const other of Object.values(ctx.state.tasks)) {
     if (other.done || !other.dependsOn.includes(t.id)) continue;
-    const stillOpen = other.dependsOn.some((d) => d !== t.id && ctx.state.tasks[d] && !ctx.state.tasks[d].done);
+    const stillOpen = other.dependsOn.some((d) => d !== t.id && Object.hasOwn(ctx.state.tasks, d) && !ctx.state.tasks[d].done);
     if (stillOpen) continue;
+    if (other.openQuestions.length) {
+      // Its dependencies are done, but an open question still blocks it: say so, and do not announce "unblocked".
+      events.push(systemMessage(other.id, `#${t.id} is done — #${other.id} no longer waits on dependencies, but still has an open question.`));
+      continue;
+    }
     unblocked.push(other.id);
     events.push(systemMessage(other.id, `#${t.id} is done — #${other.id} is unblocked.`, { about: 'unblocked' }));
   }
@@ -3146,7 +3151,7 @@ Expected: FAIL, module not found.
 `src/core/queries.js`:
 ```js
 import { nameOf, statusOf } from './agents.js';
-import { blockers, byRank, columnOf, COLUMNS, epicPath, epicProgress } from './derive.js';
+import { blockers, byRank, columnOf, COLUMNS, epicPath, epicProgress, epicTasks } from './derive.js';
 import { claimedBy } from './ops.js';
 
 /** @typedef {import('./reduce.js').BoardState} BoardState */
@@ -3175,7 +3180,11 @@ export function listTasks(state, reg, f = {}) {
     .filter((t) => t.kind === kind)
     .map((t) => ({ t, column: columnOf(t, state.tasks), epic: epicPath(t, state.tasks) }));
   if (f.column) rows = rows.filter((r) => r.column === f.column);
-  if (f.epic != null) rows = rows.filter((r) => r.t.parent === f.epic || state.tasks[r.t.parent]?.parent === f.epic);
+  if (f.epic != null) {
+    // Same membership rule as the epic progress bar.
+    const inside = new Set(epicTasks(f.epic, state.tasks).map((t) => t.id));
+    rows = rows.filter((r) => inside.has(r.t.id));
+  }
   if (f.label) rows = rows.filter((r) => r.t.labels.includes(String(f.label).trim().toLowerCase()));
   if (f.changedSince != null) rows = rows.filter((r) => r.t.updatedAt >= f.changedSince);
   if (text) {
@@ -3202,14 +3211,16 @@ export function listTasks(state, reg, f = {}) {
 
 /** Full task view; `messages` come from the task's message file. */
 export function getTask(state, reg, id, messages) {
-  const t = state.tasks[id];
+  const t = Number.isSafeInteger(id) && Object.hasOwn(state.tasks, id) ? state.tasks[id] : undefined;
   if (!t) return null;
   const all = Object.values(state.tasks);
+  const column = columnOf(t, state.tasks);
   return {
     ...t,
-    column: columnOf(t, state.tasks),
+    column,
     epicPath: epicPath(t, state.tasks),
-    blockers: blockers(t, state.tasks),
+    // Reasons are shown only when they are what puts the task in Blocked (a Done task is never "waiting").
+    blockers: column === 'blocked' ? blockers(t, state.tasks) : [],
     blocks: all.filter((o) => o.dependsOn.includes(t.id)).map((o) => o.id),
     assigneeName: t.assignee ? nameOf(reg, t.assignee) : null,
     progress: t.kind === 'epic' ? epicProgress(t.id, state.tasks) : null,
