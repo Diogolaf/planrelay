@@ -14,8 +14,10 @@ const AWS = 'AK' + 'IA' + 'ABCDEFGHIJKLMNOP';
 const ch = (...cps) => String.fromCodePoint(...cps);
 /** Text hidden in Unicode tag characters: invisible to people, read by models ("ASCII smuggling"). */
 const tagged = (s) => [...s].map((c) => ch(0xe0000 + /** @type {number} */ (c.codePointAt(0)))).join('');
-/** Removed from every text field (§14): tag characters, word joiner and invisible operators, soft hyphen, U+180E, U+034F, ZWSP, U+FEFF. */
-const HIDDEN = [0xe0000, 0xe0001, 0xe0041, 0xe007f, 0x2060, 0x2061, 0x2062, 0x2063, 0x2064, 0xad, 0x180e, 0x34f, 0x200b, 0xfeff];
+/** Removed from every text field (§14): tag characters, variation selectors 17-256, word joiner and invisible operators, soft hyphen, U+180E, U+034F, ZWSP, U+FEFF. */
+const HIDDEN = [
+  0xe0000, 0xe0001, 0xe0041, 0xe007f, 0xe0100, 0xe01ef, 0x2060, 0x2061, 0x2062, 0x2063, 0x2064, 0xad, 0x180e, 0x34f, 0x200b, 0xfeff,
+];
 /** Kept in multi-line fields, which right-to-left text, emoji and some scripts need; removed from one-line fields. */
 const JOINERS_AND_MARKS = [0x200c, 0x200d, 0x200e, 0x200f, 0x61c];
 
@@ -238,7 +240,8 @@ test('unknown fields are refused, listing the allowed ones', () => {
   refuses(() => updateTask(ctx, { id: 99, dependsOn: [2] }), /^Unknown field "dependsOn"; allowed: id, /); // checked before the lookup
   refuses(() => updateTask(ctx, JSON.parse('{"id":1,"__proto__":{"title":"x"}}')), /^Unknown field "__proto__"; allowed: /);
   refuses(() => updateTask(ctx, { id: 1, ['k'.repeat(100)]: 1 }), /^Unknown field "k{40}…"; allowed: /);
-  refuses(() => claimTask(ctx, { id: 1, force: true }), /^Unknown field "force"; allowed: id\.$/);
+  refuses(() => claimTask(ctx, { id: 1, force: true }), /^Unknown field "force"; allowed: id, takeOver\.$/);
+  refuses(() => claimTask(ctx, { id: 1, takeover: true }), /^Unknown field "takeover" \(did you mean takeOver\?\)/);
   refuses(() => postMessage(ctx, { taskId: 1, text: 'x', author: 'human' }), /^Unknown field "author"; allowed: taskId, text, kind, to, replyTo, relayedFromHuman\.$/);
   refuses(() => postMessage(ctx, { taskid: 1, text: 'x' }), /^Unknown field "taskid" \(did you mean taskId\?\)/);
   refuses(() => completeTask(ctx, { id: 1, summary: 'x', note: 'y' }), /^Unknown field "note"; allowed: id, summary\.$/);

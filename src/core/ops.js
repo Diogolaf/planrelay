@@ -1,4 +1,4 @@
-import { getAgent, nameOf, statusOf } from './agents.js';
+import { getAgent } from './agents.js';
 import { blockers } from './derive.js';
 import { systemMessage } from './maintenance.js';
 import { FILES_LIMIT } from './reduce.js';
@@ -53,7 +53,7 @@ const UPDATABLE = ['title', 'description', 'parent', 'labels', 'links', 'rank', 
 const FIELDS = {
   create: ['title', 'description', 'kind', 'parent', 'dependsOn', 'labels', 'requestedByHuman'],
   update: ['id', ...UPDATABLE],
-  claim: ['id'],
+  claim: ['id', 'takeOver'],
   post: ['taskId', 'text', 'kind', 'to', 'replyTo', 'relayedFromHuman'],
   complete: ['id', 'summary'],
   release: ['id', 'note'],
@@ -67,10 +67,11 @@ const FIELDS = {
 /**
  * Removed from every text field, one-line or multi-line (§14): invisible characters that can hide
  * instructions from the human or split a secret so redaction misses it. Unicode tag characters
- * (U+E0000-E007F, "ASCII smuggling"), word joiner and invisible operators (U+2060-2064), soft hyphen,
- * U+180E, U+034F, zero-width space and U+FEFF. The u flag is safe: texts are made well-formed first.
+ * (U+E0000-E007F, "ASCII smuggling"), variation selectors 17-256 (U+E0100-E01EF, which can carry
+ * hidden bytes; U+FE0F, which emoji need, stays), word joiner and invisible operators (U+2060-2064),
+ * soft hyphen, U+180E, U+034F, zero-width space and U+FEFF. The u flag is safe: texts are made well-formed first.
  */
-const HIDDEN = /[\u{e0000}-\u{e007f}\u2060-\u2064\u00ad\u180e\u034f\u200b\ufeff]/gu;
+const HIDDEN = /[\u{e0000}-\u{e007f}\u{e0100}-\u{e01ef}\u2060-\u2064\u00ad\u180e\u034f\u200b\ufeff]/gu;
 /**
  * One-line fields also lose C0 and C1 controls (whitespace is collapsed instead), bidi controls and
  * marks (U+202A-202E, U+2066-2069, U+200E, U+200F, U+061C), ZWNJ and ZWJ.
@@ -412,6 +413,7 @@ export function messageEvent(ctx, taskId, kind, content, extra = {}) {
  * @param {Ctx} ctx
  */
 export function createTask(ctx, input) {
+  requireActor(ctx);
   const f = fieldsOf(input, FIELDS.create);
   const kind = given(f, 'kind') ?? 'task';
   if (kind !== 'task' && kind !== 'epic') fail(`kind must be "task" or "epic"${got(kind)}.`);
@@ -447,6 +449,7 @@ export function createTask(ctx, input) {
  * @param {Ctx} ctx
  */
 export function updateTask(ctx, input) {
+  requireActor(ctx);
   const f = fieldsOf(input, FIELDS.update);
   const t = getTask(ctx, given(f, 'id'));
   const provided = (k) => (k === 'parent' ? Object.hasOwn(f, k) && f[k] !== undefined : given(f, k) !== undefined);
@@ -508,9 +511,8 @@ export function updateTask(ctx, input) {
       if (t.assignee === ctx.agentId) fail(`You hold #${t.id}; release it before moving it back to Backlog.`);
       if (liveOwner(ctx, t)) fail(`#${t.id} is claimed by ${holderName(ctx, t)}; ask them to release it first.`);
       // the holder's session has ended (or the registry no longer knows it): nobody can be asked
-      const name = holderName(ctx, t);
-      fail(`#${t.id} is held by ${name ? `${name}, whose session has ended` : 'a session that has ended'}; it is released `
-        + `automatically after ${ctx.cfg.claimTimeoutHours} h without activity, or the human can ask you to take it over.`);
+      fail(`#${t.id} is ${endedHolder(ctx, t)}; it is released automatically after ${ctx.cfg.claimTimeoutHours} h without activity, `
+        + 'or the human can ask you to take it over.');
     }
     events.push({ type: 'task.approved', actor: ctx.agentId, data: { id: t.id, approved } });
   }
@@ -529,89 +531,143 @@ const CHECKLIST_MAX = 50;
 const ITEM_RAW_MAX = 1000;
 /** A checklist item's text as stored, after redaction. */
 const ITEM_MAX = 200;
-
-/** The acting agent's display name as events store it (§4); null when the registry does not know it. */
-const myName = (ctx) => getAgent(ctx.reg, ctx.agentId)?.name ?? null;
+/** A touched file's path as stored. */
+const PATH_MAX = 300;
 
 /** A system note on a task; its author's display name is stored like any message's (§4). */
 const systemNote = (taskId, text, extra = {}) => systemMessage(taskId, text, { authorName: 'system', ...extra });
 
 /**
- * True when another agent that is not gone holds the task (§10): only that agent may complete or
- * release it, and nobody may take it over. An idle holder still holds its task.
+ * The acting agent (§10): operations act only for a registered agent whose session has not ended.
+ * The MCP server registers its agent before every call, so this fails only in a race with housekeeping.
+ * @param {Ctx} ctx @returns {import('./agents.js').Agent}
  */
-function liveOwner(ctx, t) {
-  return !!t.assignee && t.assignee !== ctx.agentId && statusOf(getAgent(ctx.reg, t.assignee), ctx.now, ctx.cfg) !== 'gone';
+function requireActor(ctx) {
+  const a = getAgent(ctx.reg, ctx.agentId);
+  return a && a.endedAt == null ? a : fail('Your session is not registered on the board yet; try again.');
+}
+
+/** The same check for the hooks' mirroring, which never throws: an unregistered or ended agent mirrors nothing. */
+function liveActor(ctx) {
+  const a = getAgent(ctx.reg, ctx.agentId);
+  return !!a && a.endedAt == null;
 }
 
 /**
- * claim_task (§8, §10). Claiming the task the agent already holds changes nothing. A claim whose
- * holder is gone is taken over, with a note addressed to the former holder (it is pinged if it comes
- * back). Open questions do not prevent a claim; open dependencies do.
+ * True when another agent holds the task and is registered with a session that has not ended
+ * (§10): only that agent may complete or release it, and nobody may take it over. An idle holder
+ * still holds its task. A dead host process or claimTimeoutHours without activity count only once
+ * housekeeping has ended that agent, which transact's `before` does in the same write, before the
+ * operation runs.
+ */
+function liveOwner(ctx, t) {
+  if (!t.assignee || t.assignee === ctx.agentId) return false;
+  const holder = getAgent(ctx.reg, t.assignee);
+  return !!holder && holder.endedAt == null;
+}
+
+/** "held by Jade, whose session has ended", or "held by a session that has ended" when no name is known. */
+function endedHolder(ctx, t) {
+  const name = holderName(ctx, t);
+  return name ? `held by ${name}, whose session has ended` : 'held by a session that has ended';
+}
+
+/** The folder of a task's claim, one line, or null. */
+function claimFolder(t) {
+  const folder = t.claim?.folder;
+  return typeof folder === 'string' ? collapse(dropInvisible(folder)) || null : null;
+}
+
+/**
+ * claim_task (§8, §10). Claiming the task the agent already holds changes nothing. A task held by
+ * a live agent is refused. A task held by a session that has ended (or that the registry no longer
+ * knows) is taken over only with takeOver: true, which the skill passes only when the human asked:
+ * a note naming the former holder and its folder is addressed to it (it is pinged if it comes back),
+ * and the result says whose work was taken over. takeOver on a task nobody holds is a normal claim.
+ * Open questions do not prevent a claim; open dependencies do.
  * @param {Ctx} ctx
  */
 export function claimTask(ctx, input) {
+  const me = requireActor(ctx);
   const f = fieldsOf(input, FIELDS.claim);
   const t = getTask(ctx, given(f, 'id'));
+  const takeOver = flag(given(f, 'takeOver'), 'takeOver') ?? false;
   if (t.kind === 'epic') fail(`#${t.id} is an epic; claim one of its tasks.`);
   if (t.done) fail(`#${t.id} is already done; pick a Ready task instead.`);
   if (t.assignee && t.assignee === ctx.agentId) return { events: [], result: { id: t.id } };
   const held = claimedBy(ctx.state, ctx.agentId);
   if (held) fail(`You already hold #${held.id} "${held.title}". Complete or release it first.`);
   if (liveOwner(ctx, t)) fail(`#${t.id} is claimed by ${holderName(ctx, t)}. Ask them on the board or pick another task.`);
+  const former = t.assignee ? { id: t.assignee, name: holderName(ctx, t), folder: claimFolder(t) } : null;
+  if (former && !takeOver) {
+    const about = [former.name, former.folder && `folder ${former.folder}`].filter(Boolean).join(', ');
+    fail(`#${t.id} is held by a session that has ended${about ? ` (${about})` : ''}; pass takeOver: true only if the human asked you to continue it.`);
+  }
   if (!t.approved) fail(`#${t.id} is in Backlog waiting for the human's approval. Approve it first only if the human asked for it.`);
   const waits = blockers(t, ctx.state.tasks).filter((b) => b.type === 'dependency').map((b) => `#${b.id}`);
   if (waits.length) fail(`#${t.id} waits on ${waits.join(', ')}. Pick a Ready task instead.`);
   const events = [];
-  if (t.assignee) {
-    // the holder is gone, or unknown to the registry: the claim is taken over like a gone holder's
-    const me = nameOf(ctx.reg, ctx.agentId);
-    const previous = holderName(ctx, t);
+  if (former) {
     // a new session can carry the gone holder's name (§4 Names, continuity)
-    const from = previous !== null && myName(ctx) === previous ? `the earlier ${previous}` : previous;
-    const text = from === null ? `${me} took over from a session that had ended.` : `${me} took over from ${from}, whose session had ended.`;
-    events.push(systemNote(t.id, text, { to: t.assignee }));
+    const from = former.name === null
+      ? 'a session that had ended'
+      : `${former.name === me.name ? `the earlier ${former.name}` : former.name}, whose session had ended`;
+    const where = former.folder ? ` (folder ${former.folder})` : '';
+    events.push(systemNote(t.id, `${me.name} took over from ${from}${where}.`, { to: former.id }));
   }
-  const folder = getAgent(ctx.reg, ctx.agentId)?.folder ?? null;
-  events.push({ type: 'task.claimed', actor: ctx.agentId, data: { id: t.id, agent: ctx.agentId, agentName: myName(ctx), folder } });
-  return { events, result: { id: t.id } };
+  events.push({ type: 'task.claimed', actor: ctx.agentId, data: { id: t.id, agent: ctx.agentId, agentName: me.name, folder: me.folder ?? null } });
+  const result = former
+    ? { id: t.id, takenOverFrom: former.id, takenOverFromName: former.name, formerFolder: former.folder }
+    : { id: t.id };
+  return { events, result };
 }
 
 /**
- * Who a question is for (§4): "human" or "any" (in any case), a registered agent's id, or the name
- * of a live agent (in any case). Agents are looked up by own keys only, so "toString" or "__proto__" never
- * match; live agents never share a name, so a name matches at most one.
+ * Who a question is for (§4): "human" or "any" (in any case), or a live agent other than the asker,
+ * by id or by name (in any case). An agent whose session has ended, and the asker itself, are
+ * refused with guidance. Agents are looked up by own keys only, so "toString" or "__proto__" never
+ * match; live agents never share a name, so a name matches at most one live agent.
  */
 function resolveRecipient(ctx, value) {
   if (typeof value !== 'string') fail(`to must be "human", "any" or an agent's name${got(value)}.`);
   const wanted = collapse(dropInvisible(value));
   const lower = wanted.toLowerCase();
   if (lower === 'human' || lower === 'any') return lower;
-  if (getAgent(ctx.reg, wanted)) return wanted;
-  const byName = Object.entries(ctx.reg.agents)
-    .find(([, a]) => a.endedAt == null && typeof a.name === 'string' && a.name.toLowerCase() === lower);
-  return byName ? byName[0] : fail(`Unknown recipient ${echo(value)}. Use "human", "any" or an active agent's name.`);
+  const named = ([, a]) => typeof a.name === 'string' && a.name.toLowerCase() === lower;
+  const entries = Object.entries(ctx.reg.agents);
+  const byId = getAgent(ctx.reg, wanted);
+  const [id, agent] = byId
+    ? [wanted, byId]
+    : entries.find((e) => e[1].endedAt == null && named(e)) ?? entries.find(named) ?? [null, null];
+  if (!agent) fail(`Unknown recipient ${echo(value)}. Use "human", "any" or an active agent's name.`);
+  if (id === ctx.agentId) fail('You cannot address a question to yourself; ask "any" or the human.');
+  if (agent.endedAt != null) fail(`${agent.name}'s session has ended; ask "any" or the human.`);
+  return id;
 }
 
-/** The id of the question an answer replies to: text, and an open question on this same task (§4). */
+/** The open question an answer replies to: its id is text, and it is open on this same task (§4). */
 function answeredQuestion(ctx, t, value) {
   if (value === undefined) {
     fail(`replyTo is required for an answer: the id of the question, such as "m12". get_task shows the open questions on #${t.id}.`);
   }
   if (typeof value !== 'string') fail(`replyTo must be a message id such as "m12"${got(value)}.`);
   const id = value.trim();
-  if (t.openQuestions.some((q) => q.id === id)) return id;
+  const question = t.openQuestions.find((q) => q.id === id);
+  if (question) return question;
   const elsewhere = Object.values(ctx.state.tasks).find((o) => o.openQuestions.some((q) => q.id === id));
   if (elsewhere) fail(`${echo(id)} is an open question on #${elsewhere.id}, not on #${t.id}; post the answer on #${elsewhere.id}.`);
   return fail(`${echo(id)} is not an open question on #${t.id}; get_task shows its open questions and their ids.`);
 }
 
 /**
- * post_message (§8). A question blocks its task until an answer names it in replyTo; `to` goes
- * only with questions (default "any") and `replyTo` only with answers.
+ * post_message (§8, §4). A question blocks its task until an answer names it in replyTo; `to` goes
+ * only with questions (default "any") and `replyTo` only with answers. Questions are refused on
+ * done tasks. A question to the human is answered only with the human's words (relayedFromHuman:
+ * true); relayedFromHuman goes with answers and comments, never with a question.
  * @param {Ctx} ctx
  */
 export function postMessage(ctx, input) {
+  requireActor(ctx);
   const f = fieldsOf(input, FIELDS.post);
   const t = getTask(ctx, given(f, 'taskId'), 'taskId');
   const kind = given(f, 'kind') ?? 'comment';
@@ -624,37 +680,64 @@ export function postMessage(ctx, input) {
     fail(`to is only used with kind "question"; leave it out of ${kind === 'answer' ? 'an answer, which goes to the asker' : 'a comment'}.`);
   }
   if (replyTo !== undefined && kind !== 'answer') fail('replyTo is only used with kind "answer"; post kind "answer" to answer a question.');
+  // false is what a question is anyway, so only true is refused
+  if (relayedFromHuman && kind === 'question') {
+    fail('relayedFromHuman is only used with kind "answer" or "comment"; a question is always your own. Post the human\'s words as a comment.');
+  }
+  if (kind === 'question' && t.done) fail(`#${t.id} is done; ask on your own task, or create a follow-up task.`);
   /** @type {Record<string, any>} */
   const extra = { relayedFromHuman };
   if (kind === 'question') extra.to = resolveRecipient(ctx, to ?? 'any');
-  if (kind === 'answer') extra.replyTo = answeredQuestion(ctx, t, replyTo);
+  if (kind === 'answer') {
+    const question = answeredQuestion(ctx, t, replyTo);
+    if (question.to === 'human' && !relayedFromHuman) {
+      fail(`#${t.id}'s question is for the human; ask them, then post their words with relayedFromHuman: true.`);
+    }
+    extra.replyTo = question.id;
+  }
   return { events: [messageEvent(ctx, t.id, kind, text, extra)], result: { taskId: t.id, kind } };
 }
 
 /**
- * complete_task (§8, §5). Any agent may complete a task that no live agent holds. Open questions
- * are closed with a system note. Each dependent that no longer waits on any dependency gets a
- * note: "unblocked" (about: 'unblocked') when nothing else blocks it, otherwise that it still has
- * an open question. A dependency on a task that does not exist counts as satisfied (derive.blockers).
+ * complete_task (§8, §5, §10). Only the holder completes: an unclaimed task is claimed first, so the
+ * approval and dependency checks of claiming always apply. Open questions are closed with a note to
+ * each asker that lists them. Each dependent that no longer waits on any dependency gets a note:
+ * "unblocked" (about: 'unblocked') when nothing else holds it back, otherwise that it still waits
+ * for the human's approval or still has an open question. A dependency on a task that does not
+ * exist counts as satisfied (derive.blockers).
  * @param {Ctx} ctx
  */
 export function completeTask(ctx, input) {
+  const me = requireActor(ctx);
   const f = fieldsOf(input, FIELDS.complete);
   const t = getTask(ctx, given(f, 'id'));
   if (t.kind === 'epic') fail(`#${t.id} is an epic; epics are not completed, their progress follows their tasks.`);
   if (t.done) fail(`#${t.id} is already done.`);
-  if (liveOwner(ctx, t)) fail(`#${t.id} is claimed by ${holderName(ctx, t)}; only they can complete it.`);
+  if (t.assignee !== ctx.agentId) {
+    if (!t.assignee) fail(`Claim #${t.id} first (claim_task), then complete it.`);
+    if (liveOwner(ctx, t)) fail(`#${t.id} is claimed by ${holderName(ctx, t)}; only they can complete it.`);
+    fail(`#${t.id} is ${endedHolder(ctx, t)}; claim it with takeOver: true if the human asked, then complete it.`);
+  }
   const summary = cleanText(given(f, 'summary'), 'summary');
   const events = [];
-  if (t.openQuestions.length) {
-    events.push(systemNote(t.id, 'Open questions were closed because the task was completed.', { closesQuestions: true }));
+  /** @type {Map<string | null, string[]>} question ids by asker */
+  const asked = new Map();
+  for (const q of t.openQuestions) asked.set(q.author ?? null, [...(asked.get(q.author ?? null) ?? []), q.id]);
+  for (const [asker, ids] of asked) {
+    const which = ids.length === 1 ? `Open question ${ids[0]} was` : `Open questions ${ids.join(', ')} were`;
+    events.push(systemNote(t.id, `${which} closed because #${t.id} was completed.`, { closesQuestions: true, to: asker }));
   }
   events.push(messageEvent(ctx, t.id, 'summary', summary));
-  events.push({ type: 'task.completed', actor: ctx.agentId, data: { id: t.id, summary, completedByName: myName(ctx) } });
+  events.push({ type: 'task.completed', actor: ctx.agentId, data: { id: t.id, summary, completedByName: me.name } });
   const pending = (id) => id !== t.id && Object.hasOwn(ctx.state.tasks, id) && !ctx.state.tasks[id].done;
   const unblocked = [];
   for (const other of Object.values(ctx.state.tasks)) {
     if (other.done || !other.dependsOn.includes(t.id) || other.dependsOn.some(pending)) continue;
+    if (!other.approved) {
+      // in Backlog: nothing is unblocked until the human approves it
+      events.push(systemNote(other.id, `#${t.id} is done — #${other.id} no longer waits on dependencies; it still waits for the human's approval.`));
+      continue;
+    }
     const open = other.openQuestions.length;
     if (open) {
       // no dependency holds it back any more, but a question still does: say so, and do not announce "unblocked"
@@ -669,23 +752,29 @@ export function completeTask(ctx, input) {
 }
 
 /**
- * release_task (§8). The note is stored as the task's handoff. Any agent may release a claim whose
- * holder is gone.
+ * release_task (§8, §10). The note is stored as the task's handoff. The holder releases its task;
+ * another agent may release a claim whose holder's session has ended (or that the registry no
+ * longer knows), and the former holder then gets a note addressed to it.
  * @param {Ctx} ctx
  */
 export function releaseTask(ctx, input) {
+  const me = requireActor(ctx);
   const f = fieldsOf(input, FIELDS.release);
   const t = getTask(ctx, given(f, 'id'));
+  if (t.done) fail(`#${t.id} is done; there is nothing to release.`);
   if (!t.assignee) fail(`#${t.id} is not claimed; there is nothing to release.`);
   if (liveOwner(ctx, t)) fail(`#${t.id} is claimed by ${holderName(ctx, t)}; only they can release it.`);
   const note = cleanText(given(f, 'note'), 'note');
-  return {
-    events: [
-      messageEvent(ctx, t.id, 'handoff', note),
-      { type: 'task.released', actor: ctx.agentId, data: { id: t.id, reason: 'manual' } },
-    ],
-    result: { id: t.id },
-  };
+  const events = [messageEvent(ctx, t.id, 'handoff', note)];
+  if (t.assignee !== ctx.agentId) {
+    const name = holderName(ctx, t);
+    const whose = name === null
+      ? 'the claim of a session that had ended'
+      : `${name === me.name ? `the earlier ${name}` : name}'s claim, whose session had ended`;
+    events.push(systemNote(t.id, `${me.name} released ${whose}.`, { to: t.assignee }));
+  }
+  events.push({ type: 'task.released', actor: ctx.agentId, data: { id: t.id, reason: 'manual' } });
+  return { events, result: { id: t.id } };
 }
 
 /**
@@ -717,7 +806,7 @@ function checklistText(value) {
  */
 export function syncChecklist(ctx, items) {
   const t = claimedBy(ctx.state, ctx.agentId);
-  if (!t || !Array.isArray(items)) return { events: [] };
+  if (!t || !Array.isArray(items) || !liveActor(ctx)) return { events: [] };
   const clean = [];
   for (const item of items.slice(0, RAW_LIST_MAX)) {
     if (clean.length === CHECKLIST_MAX) break;
@@ -731,12 +820,15 @@ export function syncChecklist(ctx, items) {
 
 /**
  * Records the first touch of a file (a repository path from the hook) on the agent's claimed task.
- * Stops at the reducer's FILES_LIMIT: past it, new paths could not be stored and the log would only grow.
+ * The path is stored and compared without hidden, control, bidi or zero-width characters and cut
+ * to PATH_MAX characters. Stops at the reducer's FILES_LIMIT: past it, new paths could not be stored
+ * and the log would only grow.
  * @param {Ctx} ctx @param {unknown} repoPath
  */
 export function touchTaskFile(ctx, repoPath) {
-  if (typeof repoPath !== 'string' || repoPath === '') return { events: [] };
+  if (typeof repoPath !== 'string') return { events: [] };
+  const path = capAt(dropInvisible(repoPath).replace(/[\t\n\v\f\r]/g, ''), PATH_MAX);
   const t = claimedBy(ctx.state, ctx.agentId);
-  if (!t || t.files.length >= FILES_LIMIT || t.files.some((f) => f.path === repoPath)) return { events: [] };
-  return { events: [{ type: 'task.file', actor: ctx.agentId, data: { id: t.id, path: repoPath, by: ctx.agentId } }] };
+  if (!path || !t || !liveActor(ctx) || t.files.length >= FILES_LIMIT || t.files.some((f) => f.path === path)) return { events: [] };
+  return { events: [{ type: 'task.file', actor: ctx.agentId, data: { id: t.id, path, by: ctx.agentId } }] };
 }

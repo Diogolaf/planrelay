@@ -41,12 +41,24 @@ test('claim refusals explain what to do', () => {
   assert.throws(() => claimTask(ctx, { id: 6 }), /is an epic/);
 });
 
-test("taking over a gone agent's claim leaves a system note", () => {
-  const ctx = ctxWith({ tasks: [{ id: 1, assignee: 'a2', claim: { folder: '/w/b', since: 0 } }] });
+test("taking over a gone agent's claim is explicit and leaves a system note", () => {
+  const ctx = ctxWith({ tasks: [{ id: 1, assignee: 'a2', claim: { folder: '/w/b', since: 0 } }, { id: 2 }] });
   endAgent(ctx.reg, 'a2', ctx.now);
-  const out = apply(ctx, claimTask(ctx, { id: 1 }));
-  assert.equal(out.events[0].data.message.text, 'Amber took over from Jade, whose session had ended.');
+  refuses(
+    () => claimTask(ctx, { id: 1 }),
+    /^#1 is held by a session that has ended \(Jade, folder \/w\/b\); pass takeOver: true only if the human asked you to continue it\.$/,
+  );
+  refuses(() => claimTask(ctx, { id: 1, takeOver: false }), /pass takeOver: true only if the human asked/);
+  refuses(() => claimTask(ctx, { id: 1, takeOver: 'yes' }), /^takeOver must be true or false \(got "yes"\)\.$/);
+  const out = apply(ctx, claimTask(ctx, { id: 1, takeOver: true }));
+  assert.equal(out.events[0].data.message.text, 'Amber took over from Jade, whose session had ended (folder /w/b).');
+  assert.deepEqual(out.result, { id: 1, takenOverFrom: 'a2', takenOverFromName: 'Jade', formerFolder: '/w/b' });
   assert.equal(ctx.state.tasks[1].assignee, 'a1');
+  // takeOver on a task nobody holds is a normal claim; on a live holder it is refused as always
+  const free = ctxWith({ tasks: [{ id: 1 }, { id: 2, assignee: 'a2' }] });
+  assert.deepEqual(claimTask(free, { id: 1, takeOver: true }).result, { id: 1 });
+  assert.deepEqual(claimTask(free, { id: 1, takeOver: true }).events.map((e) => e.type), ['task.claimed']);
+  refuses(() => claimTask(free, { id: 2, takeOver: true }), /^#2 is claimed by Jade\. Ask them on the board or pick another task\.$/);
 });
 
 test('questions go to the human, to any agent, or to an agent by name; answers close them', () => {
@@ -138,44 +150,88 @@ test("claims, completions and messages carry the acting agent's display name", (
   assert.equal(ctx.state.tasks[2].assigneeName, 'Jade');
   apply(jade, releaseTask(jade, { id: 2, note: 'Next: the screen.' }));
   assert.deepEqual([ctx.state.messages.at(-1).kind, ctx.state.messages.at(-1).authorName], ['handoff', 'Jade']);
-  // an agent the registry does not know is recorded without a name, never with someone else's
-  const stranger = { ...ctxWith({ tasks: [{ id: 1 }] }), agentId: 'unregistered' };
-  assert.deepEqual(claimTask(stranger, { id: 1 }).events[0].data, { id: 1, agent: 'unregistered', agentName: null, folder: null });
+});
+
+test('work operations act only for a registered agent whose session has not ended', () => {
+  const notYet = /^Your session is not registered on the board yet; try again\.$/;
+  const board = ctxWith({ tasks: [{ id: 1 }, { id: 2, assignee: 'unregistered' }] });
+  for (const ctx of [{ ...board, agentId: 'unregistered' }, (() => { const c = ctxWith({ tasks: [{ id: 1 }, { id: 2, assignee: 'a1' }] }); endAgent(c.reg, 'a1', c.now); return c; })()]) {
+    refuses(() => claimTask(ctx, { id: 1 }), notYet, ctx.agentId);
+    refuses(() => postMessage(ctx, { taskId: 1, text: 'Hello.' }), notYet, ctx.agentId);
+    refuses(() => completeTask(ctx, { id: 2, summary: 'Done.' }), notYet, ctx.agentId);
+    refuses(() => releaseTask(ctx, { id: 2, note: 'Bye.' }), notYet, ctx.agentId);
+    // the hooks' mirroring never throws: it records nothing
+    assert.deepEqual(syncChecklist(ctx, [{ text: 'A', done: true }]).events, [], ctx.agentId);
+    assert.deepEqual(touchTaskFile(ctx, 'src/a.js').events, [], ctx.agentId);
+  }
 });
 
 test('a takeover names the former holder, is addressed to it, and never happens while it is idle', () => {
   const ctx = ctxWith({ tasks: [{ id: 1, assignee: 'a2', claim: { folder: '/w/b', since: 0 } }] });
   endAgent(ctx.reg, 'a2', ctx.now);
-  const [note] = claimTask(ctx, { id: 1 }).events;
+  const [note] = claimTask(ctx, { id: 1, takeOver: true }).events;
   assert.deepEqual(
     [note.actor, note.data.message.author, note.data.message.authorName, note.data.message.kind, note.data.message.to],
     ['system', 'system', 'system', 'system', 'a2'],
   );
   // a holder the registry has forgotten is named as stored with the claim
   const forgotten = ctxWith({ tasks: [{ id: 1, assignee: 'old-session', assigneeName: 'Cobalt' }] });
-  assert.equal(claimTask(forgotten, { id: 1 }).events[0].data.message.text, 'Amber took over from Cobalt, whose session had ended.');
+  refuses(() => claimTask(forgotten, { id: 1 }), /^#1 is held by a session that has ended \(Cobalt\); pass takeOver: true/);
+  const out = claimTask(forgotten, { id: 1, takeOver: true });
+  assert.equal(out.events[0].data.message.text, 'Amber took over from Cobalt, whose session had ended.');
+  assert.deepEqual(out.result, { id: 1, takenOverFrom: 'old-session', takenOverFromName: 'Cobalt', formerFolder: null });
   // a new session that inherited the gone holder's name
   const namesake = ctxWith({ tasks: [{ id: 1, assignee: 'old-session', assigneeName: 'Amber' }] });
-  assert.equal(claimTask(namesake, { id: 1 }).events[0].data.message.text, 'Amber took over from the earlier Amber, whose session had ended.');
-  // an idle holder still holds its task
+  assert.equal(claimTask(namesake, { id: 1, takeOver: true }).events[0].data.message.text, 'Amber took over from the earlier Amber, whose session had ended.');
+  // an idle holder still holds its task, with or without takeOver
   const idle = ctxWith({ tasks: [{ id: 1, assignee: 'a2' }] });
   idle.reg.agents.a2.lastSeen = idle.now - 3 * HOUR;
-  refuses(() => claimTask(idle, { id: 1 }), /^#1 is claimed by Jade\. Ask them on the board or pick another task\.$/);
+  refuses(() => claimTask(idle, { id: 1, takeOver: true }), /^#1 is claimed by Jade\. Ask them on the board or pick another task\.$/);
   // one claim per agent, even when the other task's holder is gone
   const busy = ctxWith({ tasks: [{ id: 1, title: 'Search screen', assignee: 'a1' }, { id: 2, assignee: 'a2' }] });
   endAgent(busy.reg, 'a2', busy.now);
-  refuses(() => claimTask(busy, { id: 2 }), /^You already hold #1 "Search screen"\. Complete or release it first\.$/);
+  refuses(() => claimTask(busy, { id: 2, takeOver: true }), /^You already hold #1 "Search screen"\. Complete or release it first\.$/);
 });
 
-test("a gone agent's task can be completed or released by another agent", () => {
-  const ctx = ctxWith({ tasks: [{ id: 1, assignee: 'a2' }, { id: 2, assignee: 'a2' }] });
+test('only the holder completes; epics and done tasks are refused', () => {
+  const ctx = ctxWith({
+    tasks: [
+      { id: 1 }, { id: 2, assignee: 'a2' }, { id: 3, assignee: 'a2', assigneeName: 'Jade' }, { id: 4, assignee: 'old-session' },
+      { id: 5, kind: 'epic' }, { id: 6, done: true },
+    ],
+  });
+  refuses(() => completeTask(ctx, { id: 1, summary: 'Done.' }), /^Claim #1 first \(claim_task\), then complete it\.$/);
+  refuses(() => completeTask(ctx, { id: 2, summary: 'Done.' }), /^#2 is claimed by Jade; only they can complete it\.$/);
   endAgent(ctx.reg, 'a2', ctx.now);
-  apply(ctx, completeTask(ctx, { id: 1, summary: 'Finished what Jade started.' }));
-  assert.deepEqual([ctx.state.tasks[1].done, ctx.state.tasks[1].completedBy], [true, 'a1']);
-  apply(ctx, releaseTask(ctx, { id: 2, note: 'Jade left this half done.' }));
-  assert.equal(ctx.state.tasks[2].assignee, null);
-  refuses(() => completeTask(ctx, { id: 1, summary: 'Again.' }), /^#1 is already done/);
-  refuses(() => releaseTask(ctx, { id: 1, note: 'x' }), /^#1 is not claimed/);
+  refuses(
+    () => completeTask(ctx, { id: 3, summary: 'Done.' }),
+    /^#3 is held by Jade, whose session has ended; claim it with takeOver: true if the human asked, then complete it\.$/,
+  );
+  refuses(() => completeTask(ctx, { id: 4, summary: 'Done.' }), /^#4 is held by a session that has ended; claim it with takeOver: true/);
+  refuses(() => completeTask(ctx, { id: 5, summary: 'Done.' }), /^#5 is an epic; epics are not completed, their progress follows their tasks\.$/);
+  refuses(() => completeTask(ctx, { id: 6, summary: 'Done.' }), /^#6 is already done\.$/);
+  // claimed, then completed
+  apply(ctx, claimTask(ctx, { id: 3, takeOver: true }));
+  apply(ctx, completeTask(ctx, { id: 3, summary: 'Finished what Jade started.' }));
+  assert.deepEqual([ctx.state.tasks[3].done, ctx.state.tasks[3].completedBy], [true, 'a1']);
+});
+
+test("the holder releases its task; another agent releases a gone holder's claim and tells it", () => {
+  const ctx = ctxWith({ tasks: [{ id: 1, assignee: 'a2' }, { id: 2, assignee: 'old-session' }, { id: 3, done: true }, { id: 4, assignee: 'a2' }] });
+  refuses(() => releaseTask(ctx, { id: 1, note: 'x' }), /^#1 is claimed by Jade; only they can release it\.$/);
+  endAgent(ctx.reg, 'a2', ctx.now);
+  refuses(() => releaseTask(ctx, { id: 1, note: ' ' }), /^note is required\.$/);
+  const out = apply(ctx, releaseTask(ctx, { id: 1, note: 'Jade left this half done.' }));
+  assert.deepEqual(out.events.map((e) => e.data.message?.kind ?? e.type), ['handoff', 'system', 'task.released']);
+  assert.deepEqual([out.events[1].data.message.text, out.events[1].data.message.to], ["Amber released Jade's claim, whose session had ended.", 'a2']);
+  assert.equal(ctx.state.tasks[1].assignee, null);
+  const unknown = releaseTask(ctx, { id: 2, note: 'Nobody was on it.' });
+  assert.deepEqual([unknown.events[1].data.message.text, unknown.events[1].data.message.to], ['Amber released the claim of a session that had ended.', 'old-session']);
+  refuses(() => releaseTask(ctx, { id: 3, note: 'x' }), /^#3 is done; there is nothing to release\.$/);
+  refuses(() => releaseTask(ctx, { id: 1, note: 'x' }), /^#1 is not claimed; there is nothing to release\.$/);
+  // the holder's own release has no extra note
+  const own = ctxWith({ tasks: [{ id: 1, assignee: 'a1' }] });
+  assert.deepEqual(releaseTask(own, { id: 1, note: 'Next: tests.' }).events.map((e) => e.data.message?.kind ?? e.type), ['handoff', 'task.released']);
 });
 
 test("recipients are \"human\", \"any\", an agent id or a live agent's name; never an inherited property", () => {
@@ -193,8 +249,13 @@ test("recipients are \"human\", \"any\", an agent id or a live agent's name; nev
   refuses(() => ask(5), /^to must be "human", "any" or an agent's name \(got 5\)\.$/);
   refuses(() => ask(['human']), /\(got a list\)\.$/);
   refuses(() => ask(TOKEN), /^Unknown recipient "\[REDACTED\]"\./);
+  // the asker itself, by id or by name
+  refuses(() => ask('a1'), /^You cannot address a question to yourself; ask "any" or the human\.$/);
+  refuses(() => ask('amber'), /^You cannot address a question to yourself/);
+  // an agent whose session has ended, by name or by id
   endAgent(ctx.reg, 'a2', ctx.now);
-  refuses(() => ask('Jade'), /^Unknown recipient "Jade"/); // an ended agent is not asked by name
+  refuses(() => ask('Jade'), /^Jade's session has ended; ask "any" or the human\.$/);
+  refuses(() => ask('a2'), /^Jade's session has ended; ask "any" or the human\.$/);
 });
 
 test('answers name an open question on the same task', () => {
@@ -207,9 +268,60 @@ test('answers name an open question on the same task', () => {
   refuses(() => postMessage(ctx, { taskId: 1, kind: 'answer', replyTo: 'm999', text: 'Metric.' }),
     /^"m999" is not an open question on #1; get_task shows its open questions and their ids\.$/);
   refuses(() => postMessage(ctx, { taskId: 1, kind: 'answer', text: 'Metric.' }), /^replyTo is required for an answer/);
-  apply(ctx, postMessage(ctx, { taskId: 1, kind: 'answer', replyTo: ` ${id} `, text: 'Metric.' }));
+  apply(ctx, postMessage(ctx, { taskId: 1, kind: 'answer', replyTo: ` ${id} `, text: 'Metric.', relayedFromHuman: true }));
   assert.deepEqual(ctx.state.tasks[1].openQuestions, []);
   assert.equal(ctx.state.messages.at(-1).replyTo, id);
+});
+
+test("a question to the human is answered only with the human's words", () => {
+  const ctx = ctxWith({ tasks: [{ id: 14 }, { id: 15 }] });
+  apply(ctx, postMessage(ctx, { taskId: 14, kind: 'question', to: 'human', text: 'Metric or imperial?' }));
+  apply(ctx, postMessage(ctx, { taskId: 15, kind: 'question', text: 'Which endpoint?' })); // to "any"
+  const [human] = ctx.state.tasks[14].openQuestions;
+  const [any] = ctx.state.tasks[15].openQuestions;
+  const humanOnly = /^#14's question is for the human; ask them, then post their words with relayedFromHuman: true\.$/;
+  refuses(() => postMessage(ctx, { taskId: 14, kind: 'answer', replyTo: human.id, text: 'Metric.' }), humanOnly);
+  refuses(() => postMessage(ctx, { taskId: 14, kind: 'answer', replyTo: human.id, text: 'Metric.', relayedFromHuman: false }), humanOnly);
+  const jade = { ...ctx, agentId: 'a2' };
+  apply(jade, postMessage(jade, { taskId: 15, kind: 'answer', replyTo: any.id, text: '/search' })); // an agent answers "any"
+  apply(jade, postMessage(jade, { taskId: 14, kind: 'answer', replyTo: human.id, text: 'Metric.', relayedFromHuman: true }));
+  assert.deepEqual([ctx.state.tasks[14].openQuestions, ctx.state.tasks[15].openQuestions], [[], []]);
+  assert.equal(ctx.state.messages.at(-1).relayedFromHuman, true);
+  // relayedFromHuman goes with answers and comments, never with a question
+  refuses(
+    () => postMessage(ctx, { taskId: 14, kind: 'question', to: 'any', text: 'Ship it?', relayedFromHuman: true }),
+    /^relayedFromHuman is only used with kind "answer" or "comment"; a question is always your own\./,
+  );
+  assert.equal(postMessage(ctx, { taskId: 14, kind: 'question', text: 'Ship it?', relayedFromHuman: false }).result.kind, 'question');
+  assert.equal(postMessage(ctx, { taskId: 14, text: 'The human says: ship it.', relayedFromHuman: true }).events[0].data.message.relayedFromHuman, true);
+});
+
+test('questions are refused on done tasks; comments are not', () => {
+  const ctx = ctxWith({ tasks: [{ id: 5, done: true }] });
+  refuses(() => postMessage(ctx, { taskId: 5, kind: 'question', text: 'Why?' }), /^#5 is done; ask on your own task, or create a follow-up task\.$/);
+  assert.equal(postMessage(ctx, { taskId: 5, text: 'Follow-up in #6.' }).result.kind, 'comment');
+});
+
+test('completion closes open questions with a note to each asker, and leaves Backlog dependents waiting for approval', () => {
+  const q = (id, author) => ({ id, to: 'human', author, at: 0, text: 'Which oven?' });
+  const ctx = ctxWith({
+    tasks: [
+      { id: 1, assignee: 'a1', openQuestions: [q('m1', 'a1'), q('m2', 'a2'), q('m3', 'a1')] },
+      { id: 2, dependsOn: [1], approved: false, origin: 'agent' },
+      { id: 3, dependsOn: [1] },
+    ],
+  });
+  const out = apply(ctx, completeTask(ctx, { id: 1, summary: 'Shipped.' }));
+  const notes = out.events.filter((e) => e.data.message?.kind === 'system').map((e) => e.data.message);
+  assert.deepEqual(notes.map((m) => [m.taskId, m.to ?? null, m.about ?? null, m.closesQuestions ?? false, m.text]), [
+    [1, 'a1', null, true, 'Open questions m1, m3 were closed because #1 was completed.'],
+    [1, 'a2', null, true, 'Open question m2 was closed because #1 was completed.'],
+    [2, null, null, false, "#1 is done — #2 no longer waits on dependencies; it still waits for the human's approval."],
+    [3, null, 'unblocked', false, '#1 is done — #3 is unblocked.'],
+  ]);
+  assert.deepEqual(out.result, { id: 1, unblocked: [3] });
+  assert.deepEqual(ctx.state.tasks[1].openQuestions, []);
+  assert.equal(columnOf(ctx.state.tasks[2], ctx.state.tasks), 'backlog');
 });
 
 test('message inputs are type-checked; to and replyTo only go with the kind that uses them', () => {
@@ -303,15 +415,34 @@ test('messages, summaries, notes and checklist items lose hidden characters; mul
 
 test('a claim whose holder the registry no longer knows is taken over like a gone holder', () => {
   const ctx = ctxWith({ tasks: [{ id: 1, assignee: 'old-session', claim: { folder: '/w/old', since: 0 } }] });
-  const out = apply(ctx, claimTask(ctx, { id: 1 }));
+  refuses(() => claimTask(ctx, { id: 1 }), /^#1 is held by a session that has ended \(folder \/w\/old\); pass takeOver: true only if the human asked you to continue it\.$/);
+  const out = apply(ctx, claimTask(ctx, { id: 1, takeOver: true }));
   assert.deepEqual(out.events.map((e) => e.type), ['message.posted', 'task.claimed']);
   const note = out.events[0].data.message;
-  assert.deepEqual([note.author, note.to, note.text], ['system', 'old-session', 'Amber took over from a session that had ended.']);
+  assert.deepEqual([note.author, note.to, note.text], ['system', 'old-session', 'Amber took over from a session that had ended (folder /w/old).']);
+  assert.deepEqual(out.result, { id: 1, takenOverFrom: 'old-session', takenOverFromName: null, formerFolder: '/w/old' });
   assert.deepEqual([ctx.state.tasks[1].assignee, ctx.state.tasks[1].assigneeName], ['a1', 'Amber']);
-  // the same for completing or releasing it
-  const other = ctxWith({ tasks: [{ id: 1, assignee: 'old-session' }, { id: 2, assignee: 'old-session' }] });
-  assert.equal(completeTask(other, { id: 1, summary: 'Finished.' }).events.at(-1).type, 'task.completed');
-  assert.equal(releaseTask(other, { id: 2, note: 'Nobody was on it.' }).events.at(-1).type, 'task.released');
+  // with neither a name nor a folder, the refusal says only that the session has ended
+  const bare = ctxWith({ tasks: [{ id: 1, assignee: 'old-session' }] });
+  refuses(() => claimTask(bare, { id: 1 }), /^#1 is held by a session that has ended; pass takeOver: true/);
+});
+
+test('touched file paths are stored without invisible or control characters and at most 300 characters long', () => {
+  const ctx = ctxWith({ tasks: [{ id: 1, assignee: 'a1' }] });
+  const touched = (p) => touchTaskFile(ctx, p).events[0]?.data.path;
+  assert.equal(touched(`src/${ch(0x202e)}a${ch(0x200b)}.js${ch(0xe0041)}\n`), 'src/a.js');
+  apply(ctx, touchTaskFile(ctx, 'src/a.js'));
+  assert.deepEqual(touchTaskFile(ctx, `src/a${ch(0x200b)}.js`).events, []); // compared after normalizing
+  assert.equal(touched(`src/${'x'.repeat(400)}.js`), `src/${'x'.repeat(296)}`);
+  for (const p of [ch(0x200b), '\n\t', ch(0x202e, 0xe0041)]) assert.deepEqual(touchTaskFile(ctx, p).events, [], JSON.stringify(p));
+});
+
+test('variation selectors 17-256 are removed everywhere; U+FE0F, which emoji need, stays', () => {
+  const ctx = ctxWith({ tasks: [{ id: 1, assignee: 'a1' }] });
+  const hiddenBytes = ch(0xe0100, 0xe0142, 0xe01ef);
+  const text = `Nice ${ch(0x2764, 0xfe0f)}${hiddenBytes} work`;
+  assert.equal(postMessage(ctx, { taskId: 1, text }).events[0].data.message.text, `Nice ${ch(0x2764, 0xfe0f)} work`);
+  assert.equal(syncChecklist(ctx, [{ text }]).events[0].data.items[0].text, `Nice ${ch(0x2764, 0xfe0f)} work`);
 });
 
 test('file mirroring stops at FILES_LIMIT and ignores paths that are not text', () => {

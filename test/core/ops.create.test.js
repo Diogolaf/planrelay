@@ -124,8 +124,19 @@ test('creation records display names: the suggesting agent, or the agent that re
   const asked = apply(jade, createTask(jade, { title: 'Sign in with Google', requestedByHuman: true }));
   const h = ctx.state.tasks[asked.result.id];
   assert.deepEqual([h.origin, h.createdBy, h.createdByName, h.requestedVia, h.requestedViaName], ['human', 'human', null, 'a2', 'Jade']);
-  const stranger = { ...ctx, agentId: 'unregistered' };
-  assert.equal(createTask(stranger, { title: 'X' }).events[0].data.task.createdByName, null);
+});
+
+test('operations act only for a registered agent whose session has not ended', () => {
+  const ctx = ctxWith({ tasks: [{ id: 1 }] });
+  const notYet = /^BoardError: Your session is not registered on the board yet; try again\.$/;
+  for (const agentId of ['unregistered', '', '__proto__', 'toString']) {
+    const stranger = { ...ctx, agentId };
+    assert.throws(() => createTask(stranger, { title: 'X' }), notYet, agentId);
+    assert.throws(() => updateTask(stranger, { id: 1, title: 'X' }), notYet, agentId);
+  }
+  endAgent(ctx.reg, 'a1', ctx.now);
+  assert.throws(() => createTask(ctx, { title: 'X' }), notYet);
+  assert.throws(() => updateTask(ctx, { id: 1, rank: 2 }), notYet);
 });
 
 test('approval fails closed: only agentTasksNeedApproval: false lets suggestions skip Backlog', () => {
