@@ -4747,12 +4747,21 @@ Record anything unexpected as a task. Plan 3 runs the full acceptance script.
     - `needsHuman` uses `lastActivity`;
     - `whatsNew` pings messages addressed `to` the agent;
     - first, a small fix in ops: `completeTask` sends no closing-question note to the completer itself, so an agent is never pinged about its own action.
+  - **Cursor by sequence number (spec §5 Agent):** found while reviewing Task 14. A message is stamped with its writer's clock before the writer takes the lock, so a time cursor can skip it. The changes:
+    - message ring entries carry the event's `seq`;
+    - `whatsNew(state, reg, agentId, { afterSeq, since })` keeps messages with `seq > afterSeq`, and with `at >= since` when a time is given;
+    - `cursor` and `prevCursor` in the registry are board sequence numbers;
+    - `touchAgent` starts a new agent's cursor at `info.seq`, the current `state.seq` passed by the caller.
+  - **Task 15:** `describe` and the brief show `getTask`'s stored names (`createdByName`, `completedByName`, `assigneeName`, message `authorName`) instead of calling `nameOf`.
   - **Task 16:**
+    - `advanceCursor(agent, state.seq)`, never a time; `touchAgent` receives `seq: state.seq`;
     - pass `host: currentHost(env)`;
     - run housekeeping through `transact`'s `before`;
     - always return the registry;
     - add a test showing that a session returning after `claimTimeoutHours` loses its claim at its first prompt and is pinged about it.
   - **Task 17:**
+    - `whats_new` passes `{ afterSeq: agent.prevCursor ?? agent.cursor ?? 0, since }`, where the tool's `since` is an optional time filter that never moves the cursor;
+    - `list_tasks` and `get_task` rely on the queries' own validation (`BoardError` for bad filters; `limit` clamped to 1–200); `describe` uses `getTask`'s stored names;
     - render `{ unchanged: true }` results honestly ("#21 is already approved; nothing changed.");
     - `claim_task` accepts `takeOver`, and the reply names whose work was taken over;
     - `relayedFromHuman` messages render as "relayed by <agent>";
@@ -4767,6 +4776,7 @@ Record anything unexpected as a task. Plan 3 runs the full acceptance script.
     - `inheritClaim`'s `task.claimed` carries `agentName`;
     - system messages carry `authorName: 'system'`;
     - test helpers remove their temp folders on exit (prefix `agentboard-test-`).
+- **Carried over to plan 2 (dashboard):** `listTasks` refuses non-number filter values, so URL parameters such as `epic` must be converted to numbers first.
 - **Carried over to plan 3, before the first push:**
   - CI hardening:
     - verify the gitleaks download with a SHA-256 checksum;
