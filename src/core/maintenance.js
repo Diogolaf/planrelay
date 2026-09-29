@@ -22,7 +22,7 @@ export function systemMessage(taskId, text, extra = {}) {
   return {
     type: 'message.posted',
     actor: 'system',
-    data: { message: { mentions: [], ...extra, taskId, author: 'system', kind: 'system', text } },
+    data: { message: { mentions: [], ...extra, taskId, author: 'system', authorName: 'system', kind: 'system', text } },
   };
 }
 
@@ -45,9 +45,11 @@ const notFound = (code) => code === 'ENOENT' || code === 'ENOTDIR';
  * that is unplugged or disconnected or a share that is unreachable (Windows reports ENOENT for
  * those, and for their root too). Known gap: an unmounted POSIX mount point is an empty folder
  * that exists, so a folder inside it still counts as missing.
+ * A path that is not absolute is never missing.
  * @param {string} p absolute path @returns {boolean}
  */
 export function folderMissing(p) {
+  if (typeof p !== 'string' || !path.isAbsolute(p)) return false; // a relative path proves nothing
   if (!notFound(statError(p))) return false;
   for (let dir = p; ;) {
     const up = path.dirname(dir);
@@ -204,6 +206,6 @@ export function inheritClaim(state, reg, agentId, folder) {
       : `${me} continues this task in the same folder (taken over from ${previous}).`;
   return [
     systemMessage(candidate.id, text),
-    { type: 'task.claimed', actor: agentId, data: { id: candidate.id, agent: agentId, folder } },
+    { type: 'task.claimed', actor: agentId, data: { id: candidate.id, agent: agentId, agentName: getAgent(reg, agentId)?.name ?? null, folder } },
   ];
 }

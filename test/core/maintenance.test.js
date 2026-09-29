@@ -290,7 +290,7 @@ test('a claim with a corrupt since is not released instantly', () => {
 test('systemMessage: extra fields never replace the task, author, kind or text', () => {
   const ev = systemMessage(3, 'Hello.', { to: 's1', taskId: 9, author: 's2', kind: 'answer', text: 'Other.' });
   assert.equal(ev.actor, 'system');
-  assert.deepEqual(ev.data.message, { mentions: [], to: 's1', taskId: 3, author: 'system', kind: 'system', text: 'Hello.' });
+  assert.deepEqual(ev.data.message, { mentions: [], to: 's1', taskId: 3, author: 'system', authorName: 'system', kind: 'system', text: 'Hello.' });
 });
 
 test('old ended agents without claims, stale touches and finished activity are pruned', () => {
@@ -328,7 +328,7 @@ test('a new session inherits a claim left in its folder by a gone agent', () => 
   const events = inheritClaim(state, reg, 's2', A);
   assert.deepEqual(events.map((e) => e.type), ['message.posted', 'task.claimed']);
   assert.equal(events[0].data.message.text, 'Jade continues this task in the same folder (taken over from Amber).');
-  assert.deepEqual(events[1].data, { id: 1, agent: 's2', folder: A });
+  assert.deepEqual(events[1].data, { id: 1, agent: 's2', agentName: 'Jade', folder: A });
 });
 
 test('a successor that reused the same name gets a plain continuation message', () => {
@@ -356,4 +356,17 @@ test('no inheritance from a live agent, another folder, or when already holding 
   assert.deepEqual(inheritClaim(state, reg, 's2', B), []);
   state.tasks[2] = newTask({ id: 2, assignee: 's2', claim: { folder: A, since: T0 } });
   assert.deepEqual(inheritClaim(state, reg, 's2', A), []);
+});
+
+test('folderMissing: a path that is not absolute is never missing', () => {
+  assert.equal(folderMissing('no/such/relative/folder'), false);
+  assert.equal(folderMissing(''), false);
+  assert.equal(folderMissing('.'), false);
+});
+
+test('system messages made by maintenance carry the author name "system"', () => {
+  const { state, reg } = setup();
+  const events = maintenance(state, reg, DEFAULTS, T0 + 25 * HOUR, io());
+  const note = events.find((e) => e.type === 'message.posted');
+  assert.equal(note.data.message.authorName, 'system');
 });
