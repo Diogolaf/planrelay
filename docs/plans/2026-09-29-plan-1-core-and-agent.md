@@ -1879,6 +1879,20 @@ function stamp(e, seq, now) {
  * @returns {{ state: BoardState, events: BoardEvent[], result: R | undefined }}
  */
 export function transact(board, fn, opts = {}) {
+  try {
+    return lockedTransact(board, fn, opts);
+  } catch (err) {
+    // The events were written; only releasing the lock failed (another process held the lock file open).
+    // Report success so callers do not retry a committed write; the mutex clears the orphaned lock next time.
+    if (err && err.code === 'ELOCKRELEASE') {
+      logError(board, 'lock release', err.cause ?? err);
+      return err.result;
+    }
+    throw err;
+  }
+}
+
+function lockedTransact(board, fn, opts) {
   return withLock(board.dir, () => {
     const now = opts.now ?? Date.now();
     let state = readJson(board.files.state, null);
