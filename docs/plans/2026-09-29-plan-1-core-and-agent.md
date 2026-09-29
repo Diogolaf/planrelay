@@ -3150,8 +3150,9 @@ Expected: FAIL, module not found.
 
 `src/core/queries.js`:
 ```js
-import { nameOf, statusOf } from './agents.js';
+import { getAgent, nameOf, statusOf } from './agents.js';
 import { blockers, byRank, columnOf, COLUMNS, epicPath, epicProgress, inEpic } from './derive.js';
+import { lastActivity } from './maintenance.js';
 import { claimedBy } from './ops.js';
 
 /** @typedef {import('./reduce.js').BoardState} BoardState */
@@ -3260,8 +3261,8 @@ export function needsHuman(state, reg, cfg, now) {
     if (t.kind === 'task' && !t.approved && t.origin === 'agent') {
       approvals.push({ id: t.id, title: t.title, suggestedBy: nameOf(reg, t.createdBy) });
     }
-    if (t.assignee && statusOf(reg.agents[t.assignee], now, cfg) === 'gone') {
-      const last = Math.max(t.claim?.since ?? 0, reg.activity[t.id] ?? 0, reg.agents[t.assignee]?.lastSeen ?? 0);
+    if (t.assignee && statusOf(getAgent(reg, t.assignee), now, cfg) === 'gone') {
+      const last = lastActivity(t, reg); // same formula as the real release, so the countdown is honest
       stalled.push({ id: t.id, title: t.title, since: last, releaseAt: last + cfg.claimTimeoutHours * 3_600_000 });
     }
   }
@@ -4728,6 +4729,39 @@ Record anything unexpected as a task. Plan 3 runs the full acceptance script.
   - nothing stored as `undefined`.
 
   The repository code supersedes the Task 7 listing. Task 9's `replay` uses `isEvent`, and Task 13's `touchTaskFile` uses `FILES_LIMIT`.
+- **Tasks 8–12 were hardened after review**; in each case the repository code supersedes the listing:
+  - **derive:** depth-independent, cycle-safe epic helpers; `isBlocked`; `inEpic`.
+  - **store:** batch framing, fence, tail catch-up, never read-only, registry written first, `transact(…, { before })` for housekeeping, sanitized registry.
+  - **agents:** hosts, one live agent per pid, no ambiguous folder match, stable unique names, `getAgent`.
+  - **maintenance and locks:**
+    - only the writer's own host is judged;
+    - a 10-minute grace for missing folders, and the sweep runs once a minute;
+    - releases are addressed to the former holder and name them;
+    - lock modes per §10;
+    - `lastActivity` is exported.
+  - **ops:** redacted labels, strict types, normalized text, at most 50 dependencies, safe links, names in events.
+- **Must-dos for the remaining tasks** (from the reviews):
+  - **Task 13:** use `getAgent`/`Object.hasOwn` for every agent lookup (for example in `resolveRecipient`); messages carry `authorName`; `task.claimed` carries `agentName`; `task.completed` carries `completedByName`.
+  - **Task 14:**
+    - prefer the names stored in events (`authorName`, `assigneeName`, …) over `nameOf`;
+    - `needsHuman` uses `lastActivity`;
+    - `whatsNew` pings messages addressed `to` the agent.
+  - **Task 16:**
+    - pass `host: currentHost(env)`;
+    - run housekeeping through `transact`'s `before`;
+    - always return the registry;
+    - add a test showing that a session returning after `claimTimeoutHours` loses its claim at its first prompt and is pinged about it.
+  - **Task 17:**
+    - touch only with the server's own pid and host;
+    - never revive an ended agent;
+    - run housekeeping through `before`;
+    - reload config on every call.
+  - **Store follow-up:** save the registry whenever `before` ran, even if `fn` does not return it.
+  - **Maintenance follow-up:**
+    - `folderMissing` returns false for relative paths;
+    - `inheritClaim`'s `task.claimed` carries `agentName`;
+    - the release system messages carry `authorName` `system`.
+  - **Tests follow-up:** the test helpers must remove their temp folders; runs so far left thousands behind in the OS temp folder.
 - **Carried over to plan 3, before the first push:**
   - CI hardening:
     - verify the gitleaks download with a SHA-256 checksum;
