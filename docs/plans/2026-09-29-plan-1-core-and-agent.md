@@ -4596,3 +4596,28 @@ Record anything unexpected as a task. Plan 3 runs the full acceptance script.
 | §17 tests (core, concurrency, contracts, performance, 3-OS CI) | Every task; Tasks 3, 9, 19; Task 2 CI |
 | §13 dashboard | Plan 2 |
 | §18 marketplace and npm package; acceptance run | Plan 3 |
+
+## Execution notes
+
+- **Task 2 was hardened after review** (commit "fix(guard): harden the leak guard after review"). The pure logic moved to `scripts/lib/denylist.mjs`, with these changes:
+  - printed paths are masked;
+  - term parsing is encoding-aware;
+  - matching ignores accents and case;
+  - there are `--history` and `--message` modes;
+  - the identity check uses `git var`;
+  - errors fail closed;
+  - `commit-msg` and `pre-merge-commit` hooks were added;
+  - integration tests were added.
+
+  The code in the repository supersedes the Task 2 listing above.
+- **Carried over to plan 3, before the first push:**
+  - CI hardening:
+    - verify the gitleaks download with a SHA-256 checksum;
+    - run the denylist check in its own job;
+    - pin actions to commit SHAs;
+    - set `persist-credentials: false`;
+    - add `setup-node` to the leaks job;
+    - handle forks and Dependabot, which have no secret;
+    - run the denylist step even if gitleaks fails.
+  - Run `--history` in CI, and add a `pre-push` hook over the pushed range.
+  - Run the full-history scan once more right before the repository is made public.
