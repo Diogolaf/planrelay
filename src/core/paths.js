@@ -48,7 +48,7 @@ const isFile = (p) => statOrNull(p)?.isFile() === true;
 const isDir = (p) => statOrNull(p)?.isDirectory() === true;
 const sha256 = (s) => createHash('sha256').update(s).digest('hex');
 
-/** Name of a folder; at a drive or file-system root, the root itself ('Q:', '/', '\\server\share'). */
+/** Name of a folder; at a drive or file-system root, the root itself ('Q:', '/'). A UNC share root gives the share name ('share'). */
 function baseName(p) {
   const name = path.basename(p);
   if (name) return name;
@@ -108,36 +108,40 @@ function readGitFile(dir, file) {
  * cannot be read or points to something that is not a git dir ends the search: git refuses such a
  * folder, and guessing could put a board in a folder that does not exist.
  *
- * Ownership, like git's safe.directory: on POSIX a `.git` owned by another user is skipped. On
- * Windows, owners cannot be read without a process spawn or native code, so a folder inside the
- * home folder never uses a `.git` above the home folder (`C:\Users\.git`, `C:\.git`), the places
- * another account could plant one. Remaining risk: on Windows, a folder outside the home folder can
- * still pick up a `.git` planted higher up (for example `D:\.git` on a shared drive); the gitdir
- * that a `.git` file points to is not owner-checked; the home-folder rule and
- * GIT_CEILING_DIRECTORIES compare spellings (plus each ceiling's real path), so a working folder
- * reached through a junction, symlink or 8.3 short name can walk past them; GIT_DIR, GIT_WORK_TREE
- * and GIT_DISCOVERY_ACROSS_FILESYSTEM are ignored.
+ * Ownership, like git's safe.directory: on POSIX, a `.git` owned by another user ends the search
+ * (git fails with "dubious ownership" there too), so the board falls back to the home folder. There
+ * is no safe.directory escape hatch and no SUDO_UID handling (git lets root use a repository owned
+ * by the user who ran sudo; here that repository is refused). On Windows, owners cannot be read
+ * without a process spawn or native code, so a folder inside the home folder never uses a `.git`
+ * above the home folder (`C:\Users\.git`, `C:\.git`), the places another account could plant one.
+ * Remaining risk: on Windows, a folder outside the home folder can still pick up a `.git` planted
+ * higher up (for example `D:\.git` on a shared drive); the gitdir that a `.git` file points to is
+ * not owner-checked; the home-folder rule and GIT_CEILING_DIRECTORIES compare spellings (plus each
+ * ceiling's real path), so a working folder reached through a junction, symlink or 8.3 short name
+ * can walk past them; GIT_DIR, GIT_WORK_TREE and GIT_DISCOVERY_ACROSS_FILESYSTEM are ignored.
  *
  * @param {string} start absolute path
- * @param {{ ceilings: Set<string>, stopAt: string | null }} limits
+ * @param {{ ceilings: Set<string>, stopAt: string | null, uid: number | null, ownerOf?: (file: string) => number }} limits
  *   ceilings: folded GIT_CEILING_DIRECTORIES (git never checks a ceiling that lies above `start`,
- *   nor anything higher); stopAt: folded folder that is the last one checked.
+ *   nor anything higher); stopAt: folded folder that is the last one checked; uid: the user who must
+ *   own a `.git` (null: no owner check); ownerOf: owner of a `.git` (default: its stat uid).
  * @returns {{ top: string, gitDir: string, commonDir: string } | null}
  */
-function findGit(start, { ceilings, stopAt }) {
+function findGit(start, { ceilings, stopAt, uid, ownerOf }) {
+  const foreign = (file, stat) => uid !== null && (ownerOf ? ownerOf(file) : stat.uid) !== uid;
   let dir = start;
   for (;;) {
     const dotGit = path.join(dir, '.git');
     const stat = statOrNull(dotGit);
-    if (stat && (UID === null || stat.uid === UID)) {
-      if (stat.isDirectory()) {
-        const found = gitDirInfo(dotGit);
-        if (found) return { top: dir, ...found };
-      } else if (stat.isFile()) {
-        const gitDir = readGitFile(dir, dotGit);
-        const found = gitDir && gitDirInfo(gitDir);
-        return found ? { top: dir, ...found } : null;
-      }
+    if (stat?.isDirectory()) {
+      const found = gitDirInfo(dotGit);
+      // like git, a folder that is not a git dir is passed over whoever owns it; a real one owned by someone else stops the search
+      if (found) return foreign(dotGit, stat) ? null : { top: dir, ...found };
+    } else if (stat?.isFile()) {
+      if (foreign(dotGit, stat)) return null;
+      const gitDir = readGitFile(dir, dotGit);
+      const found = gitDir && gitDirInfo(gitDir);
+      return found ? { top: dir, ...found } : null;
     }
     const parent = path.dirname(dir);
     if (parent === dir) return null;
@@ -160,28 +164,21 @@ function repoName(commonDir) {
 
 /**
  * The folder a board belongs to outside git, so that `cd` into a subfolder keeps the same board:
- * the nearest folder, from `abs` up, that has a `.agentboard/` folder or already has a board.
- * - Inside `projectDir` (the host's project folder), the search ends at `projectDir`, which is
- *   also the answer when nothing below it matches.
- * - Otherwise the search goes further up, but never considers a file-system root, the home folder
- *   or its parents (the home folder holds the global `.agentboard/`, and one board there would
- *   swallow every folder below it), or a GIT_CEILING_DIRECTORIES entry, and stops there; when
- *   nothing matches, the answer is `abs`.
+ * the nearest folder, from `abs` up, that has a `.agentboard/` folder or already has a board; else
+ * `abs`. Above `abs`, the search never considers a file-system root, the home folder or its
+ * parents (the home folder holds the global `.agentboard/`, and one board there would swallow
+ * every folder below it), or a GIT_CEILING_DIRECTORIES entry, and stops there.
  * @returns {{ root: string, key: string }} root in the caller's spelling where possible; key hashes to the board folder
  */
-function nonGitFolder(abs, { home, ceilings, projectDir }) {
+function nonGitFolder(abs, { home, ceilings }) {
   const real = realOrSelf(abs);
-  const project = projectDir ? path.resolve(projectDir) : null;
-  const projectKey = project === null ? null : pathKey(project);
-  const inProject = projectKey !== null && within(fold(real), projectKey);
   const homeKey = fold(realOrSelf(home));
   const boards = path.join(home, CONFIG_DIR, 'boards');
   // Every parent of a real path is a real path, so parents need no realpath call of their own.
   let dir = real;
   for (let up = 0; ; up++) {
     const key = fold(dir);
-    if (!inProject && up > 0 && (path.dirname(dir) === dir || within(homeKey, key) || ceilings.has(key))) break;
-    if (inProject && key === projectKey) return { root: project, key };
+    if (up > 0 && (path.dirname(dir) === dir || within(homeKey, key) || ceilings.has(key))) break;
     if (isDir(path.join(dir, CONFIG_DIR)) || isDir(path.join(boards, sha256(key)))) {
       if (up === 0) return { root: abs, key };
       let spelled = abs;
@@ -196,27 +193,46 @@ function nonGitFolder(abs, { home, ceilings, projectDir }) {
 }
 
 /**
+ * The folder the search starts from: `projectDir` when `abs` lies inside it (compared on
+ * normalized real paths), else `abs`.
+ */
+function startFolder(abs, projectDir) {
+  if (!projectDir) return abs;
+  const project = path.resolve(projectDir);
+  return within(fold(abs), fold(project)) || within(pathKey(abs), pathKey(project)) ? project : abs;
+}
+
+/**
  * Where the board for a folder lives (§6): in the shared git dir inside git, else under
  * `~/.agentboard/boards/<sha256 of the folder's normalized real path>/`.
+ *
+ * One session, one board: when `cwd` lies inside `projectDir`, the search starts from `projectDir`
+ * instead, inside git or not. Hooks pass the agent's current folder and the MCP server passes the
+ * project folder, so a `cd` into a submodule, a nested repository or a subfolder with its own
+ * `.agentboard/` must not give the two a different board. A `cwd` outside `projectDir` is resolved
+ * from itself.
  * @param {string} cwd
- * @param {{ home?: string, projectDir?: string, env?: Record<string, string | undefined> }} [opts]
+ * @param {{ home?: string, projectDir?: string, env?: Record<string, string | undefined>, uid?: number | null, ownerOf?: (file: string) => number }} [opts]
  *   home: the home folder (default os.homedir()); projectDir: the host's project folder (for
- *   example CLAUDE_PROJECT_DIR), used outside git; env: for GIT_CEILING_DIRECTORIES (default process.env).
+ *   example CLAUDE_PROJECT_DIR); env: for GIT_CEILING_DIRECTORIES (default process.env); uid: the
+ *   user who must own a `.git` (default process.getuid(), none on Windows; null: no owner check);
+ *   ownerOf: owner uid of a `.git` path (default: from its stat; for tests).
  * @returns {{ boardDir: string, repoRoot: string, projectName: string, inGit: boolean, gitDir: string | null }}
  */
 export function resolveBoard(cwd, opts = {}) {
   const home = path.resolve(opts.home ?? os.homedir());
-  const abs = path.resolve(cwd);
+  const start = startFolder(path.resolve(cwd), opts.projectDir);
   const ceilings = ceilingKeys((opts.env ?? process.env).GIT_CEILING_DIRECTORIES);
   const homeKey = fold(home);
-  const stopAt = process.platform === 'win32' && within(fold(abs), homeKey) ? homeKey : null;
-  const git = findGit(abs, { ceilings, stopAt });
+  const stopAt = process.platform === 'win32' && within(fold(start), homeKey) ? homeKey : null;
+  const uid = opts.uid !== undefined ? opts.uid : UID;
+  const git = findGit(start, { ceilings, stopAt, uid, ownerOf: opts.ownerOf });
   if (git) {
     return {
       boardDir: path.join(git.commonDir, NAME), repoRoot: git.top, projectName: repoName(git.commonDir), inGit: true, gitDir: git.gitDir,
     };
   }
-  const { root, key } = nonGitFolder(abs, { home, ceilings, projectDir: opts.projectDir });
+  const { root, key } = nonGitFolder(start, { home, ceilings });
   return {
     boardDir: path.join(home, `.${NAME}`, 'boards', sha256(key)), repoRoot: root, projectName: baseName(root), inGit: false, gitDir: null,
   };
@@ -250,7 +266,9 @@ export function samePath(a, b) {
 
 /**
  * Repo-relative path with forward slashes, in the caller's letter case, used for file touches; null
- * for a file outside `repoRoot` (scratch files, temp folders, another drive).
+ * for a file outside `repoRoot` (scratch files, temp folders, another drive). Paths are compared
+ * as spelled, without resolving links: a file spelled through a junction or symlink (or by its real
+ * path) when `repoRoot` is spelled the other way also gives null.
  */
 export function toRepoPath(repoRoot, file) {
   const root = path.resolve(repoRoot);
