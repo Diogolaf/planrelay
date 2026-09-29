@@ -1,7 +1,7 @@
 import { getAgent, nameOf, statusOf } from './agents.js';
 import { blockers, byRank, childrenIndex, columnOf, COLUMNS, epicPath, epicProgress, inEpic } from './derive.js';
 import { claimReleaseAt, claimTimedOut, lastActivity } from './maintenance.js';
-import { BoardError, claimedBy, fieldsOf, got, taskNumber } from './ops.js';
+import { BoardError, claimedBy, collapse, dropInvisible, fieldsOf, got, taskNumber } from './ops.js';
 import { displayName, MESSAGE_RING, newTask } from './reduce.js';
 
 /**
@@ -62,7 +62,7 @@ const writtenByOrNull = (reg, id, name) => (id == null && displayName(name) === 
 /** The name of a task's current holder (see the module note); null when nobody holds it. */
 function holderName(reg, t) {
   if (!t.assignee) return null;
-  return getAgent(reg, t.assignee)?.name ?? displayName(t.assigneeName) ?? nameOf(reg, t.assignee);
+  return displayName(getAgent(reg, t.assignee)?.name) ?? displayName(t.assigneeName) ?? nameOf(reg, t.assignee);
 }
 
 /**
@@ -91,12 +91,20 @@ function epicFilter(state, value) {
   return id;
 }
 
-/** A text filter, trimmed and lower-cased; '' (no filter) when not given or blank. */
-function searchText(value, help) {
+/**
+ * A text filter normalized the way ops normalizes a one-line text before storing it (titles, and
+ * labels with NFC): invisible, control, bidi and zero-width characters dropped, whitespace
+ * collapsed; then lower-cased. Never redacted. '' (no filter) when not given or nothing is left.
+ */
+function filterText(value, help, { nfc = false } = {}) {
   if (value === undefined) return '';
   if (typeof value !== 'string') throw new BoardError(`${help}${got(value)}.`);
-  return value.trim().toLowerCase();
+  const kept = dropInvisible(value);
+  return collapse(nfc ? kept.normalize('NFC') : kept).toLowerCase();
 }
+
+/** Completion time for sorting Done, newest first; -Infinity when not usable, so those come last. */
+const doneTime = (t) => (Number.isFinite(t.doneAt) ? t.doneAt : -Infinity);
 
 /** The page size: see LIST_LIMIT. */
 function pageSize(value) {
@@ -113,8 +121,10 @@ function pageSize(value) {
  * list_tasks (§8): tasks (or, with kind 'epic', epics with progress) in column order, then rank.
  * - column: one of COLUMNS; epic: an epic's id, matching tasks at any depth below it (inEpic, the
  *   rule of the progress bar), and sub-epics when kind is 'epic';
- * - label: one label, in any case and spacing; text: part of the title, the description or the
- *   epic path, in any case; a number, with or without "#", finds that id;
+ * - label: one label; text: part of the title, the description or the epic path, where spaces and
+ *   line breaks match each other; a number, with or without "#", finds that id. Both are
+ *   normalized like stored text (filterText), so case, spacing and invisible characters don't matter;
+ * - Done lists the most recently completed first; the other columns follow rank;
  * - changedSince: a Unix time in ms; limit: see LIST_LIMIT.
  * `total` counts every match; `items` holds the first `limit`.
  * @param {BoardState} state
@@ -130,9 +140,9 @@ export function listTasks(state, reg, input) {
   if (column !== undefined && !COLUMNS.includes(column)) throw new BoardError(`column must be one of ${COLUMNS.join(', ')}${got(column)}.`);
   const epicIn = given(f, 'epic');
   const epic = epicIn === undefined ? undefined : epicFilter(state, epicIn);
-  // labels are stored one-line, NFC and lower-cased (ops)
-  const label = searchText(given(f, 'label'), 'label must be text, such as "bug"').normalize('NFC').replace(/\s+/g, ' ');
-  const text = searchText(given(f, 'text'), 'text must be text');
+  // labels are stored this way (ops cleanLabels), so a label matches as the agent typed it
+  const label = filterText(given(f, 'label'), 'label must be text, such as "bug"', { nfc: true });
+  const text = filterText(given(f, 'text'), 'text must be text');
   const changedSince = given(f, 'changedSince');
   if (changedSince !== undefined && !Number.isFinite(changedSince)) {
     throw new BoardError(`changedSince must be a Unix time in milliseconds${got(changedSince)}.`);
@@ -149,10 +159,11 @@ export function listTasks(state, reg, input) {
   if (changedSince !== undefined) rows = rows.filter((r) => r.t.updatedAt >= changedSince);
   if (text) {
     rows = rows.filter((r) =>
-      idMatch ? r.t.id === Number(idMatch[1]) : `${r.t.title} ${r.t.description} ${r.epic}`.toLowerCase().includes(text),
+      idMatch ? r.t.id === Number(idMatch[1]) : collapse(`${r.t.title} ${r.t.description} ${r.epic}`).toLowerCase().includes(text),
     );
   }
-  rows.sort((a, b) => COLUMNS.indexOf(a.column) - COLUMNS.indexOf(b.column) || byRank(a.t, b.t));
+  rows.sort((a, b) => COLUMNS.indexOf(a.column) - COLUMNS.indexOf(b.column)
+    || (a.column === 'done' ? doneTime(b.t) - doneTime(a.t) || byRank(a.t, b.t) : byRank(a.t, b.t)));
   const children = kind === 'epic' ? childrenIndex(state.tasks) : undefined;
   return {
     total: rows.length,

@@ -84,10 +84,10 @@ const MULTI_LINE_DROP = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g;
 /** Lone surrogates become U+FFFD; hidden characters go. */
 const visible = (s) => s.toWellFormed().replace(HIDDEN, '');
 /** A one-line text without hidden, control, bidi or zero-width characters; whitespace is kept (see collapse). */
-const dropInvisible = (s) => visible(s).replace(ONE_LINE_DROP, '');
+export const dropInvisible = (s) => visible(s).replace(ONE_LINE_DROP, '');
 /** A multi-line text with LF line ends and no hidden or control characters but newlines and tabs. */
 const multiLine = (s) => visible(s).replace(/\r\n?/g, '\n').replace(MULTI_LINE_DROP, '');
-const collapse = (s) => s.replace(/\s+/g, ' ').trim();
+export const collapse = (s) => s.replace(/\s+/g, ' ').trim();
 
 /** An own field's value; null and undefined both mean "not provided" (§14). */
 const given = (obj, key) => (Object.hasOwn(obj, key) && obj[key] != null ? obj[key] : undefined);

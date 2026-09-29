@@ -264,6 +264,17 @@ test('nameOf', () => {
   assert.equal(nameOf(reg, 'gone-long-ago'), 'an earlier agent');
 });
 
+test('nameOf always returns usable text, even from a hand-edited registry', () => {
+  const reg = emptyRegistry();
+  const a = touchAgent(reg, { id: 's1' }, T0);
+  for (const bad of [{ first: 'Amber' }, '', '   ', 7, null, 'A'.repeat(61)]) {
+    /** @type {any} */ (a).name = bad;
+    assert.equal(nameOf(reg, 's1'), 'an earlier agent', JSON.stringify(bad));
+  }
+  a.name = '  Amber ';
+  assert.equal(nameOf(reg, 's1'), 'Amber');
+});
+
 test('empty ids are refused', () => {
   const reg = emptyRegistry();
   assert.throws(() => touchAgent(reg, { id: '' }, T0), TypeError);

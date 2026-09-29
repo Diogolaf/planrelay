@@ -1,5 +1,6 @@
 import os from 'node:os';
 import { samePath } from './paths.js';
+import { displayName } from './reduce.js';
 
 /**
  * Display names and colors (dark tones, white initials at ≥ 4.5:1). Frozen, and only ever
@@ -197,9 +198,9 @@ export function resolveAgentId(reg, q, now = Date.now()) {
   return null;
 }
 
-/** Human-readable author name for texts shown to agents. */
+/** Human-readable author name for texts shown to agents: always non-empty text, whatever the registry holds. */
 export function nameOf(reg, id) {
   if (id === 'human') return 'the human';
   if (id === 'system') return 'system';
-  return getAgent(reg, id)?.name ?? 'an earlier agent';
+  return displayName(getAgent(reg, id)?.name) ?? 'an earlier agent';
 }

@@ -152,6 +152,34 @@ test("a holder shows under its current name, which other agents address it by; w
   assert.equal(t.messages[0].authorName, 'Amber');
 });
 
+test('a registry name that is not usable text is never shown; the name stored with the claim is', () => {
+  const ctx = ctxWith({ tasks: [{ id: 1, title: 'Vegetarian filter', assignee: 'a1', assigneeName: 'Amber' }] });
+  const a1 = /** @type {any} */ (ctx.reg.agents.a1);
+  a1.name = { first: 'Amber' }; // a hand-edited agents.json: the registry reader keeps the agent
+  assert.equal(listTasks(ctx.state, ctx.reg, {}).items[0].assignee, 'Amber');
+  a1.name = '';
+  assert.equal(getTask(ctx.state, ctx.reg, 1, []).assigneeName, 'Amber');
+  ctx.state.tasks[1].assigneeName = null; // nothing stored either: nameOf's fallback, which is always text
+  assert.equal(getTask(ctx.state, ctx.reg, 1, []).assigneeName, 'an earlier agent');
+  assert.equal(getTask(ctx.state, ctx.reg, 1, [{ id: 'm1', author: 'a1', kind: 'comment', text: 'x' }]).messages[0].authorName, 'an earlier agent');
+});
+
+test('Done lists the most recently completed first; the other columns keep rank order', () => {
+  const ctx = ctxWith({
+    tasks: [
+      { id: 1, title: 'Vegetarian filter', done: true, doneAt: T0 + HOUR, rank: 1 },
+      { id: 2, title: 'Password reset', done: true, doneAt: T0 + 3 * HOUR, rank: 2 },
+      { id: 3, title: 'Search by ingredient', done: true, doneAt: T0 + 2 * HOUR, rank: 3 },
+      { id: 4, title: 'Cache photos', done: true, doneAt: T0 + 2 * HOUR, rank: 0 }, // same time: rank decides
+      { id: 5, title: 'Share a recipe', done: true, doneAt: null, rank: -1 }, // no usable time: last
+      { id: 6, title: 'Offline mode', rank: 9 },
+      { id: 7, title: 'Dark theme', rank: 8 },
+    ],
+  });
+  assert.deepEqual(listTasks(ctx.state, ctx.reg, {}).items.map((i) => i.id), [7, 6, 2, 4, 3, 1, 5]);
+  assert.deepEqual(listTasks(ctx.state, ctx.reg, { column: 'done', limit: 1 }).items.map((i) => i.id), [2]);
+});
+
 test('list filters come from tool arguments: a bad one is refused with guidance', () => {
   const { state, reg } = sample();
   const bad = (f, re) => refuses(() => listTasks(state, reg, f), re, JSON.stringify(f));
@@ -203,17 +231,36 @@ test('null means not provided; limit is clamped to 1-200, and anything but a num
   assert.equal(listTasks(ctx.state, ctx.reg, { text: '  ', label: '' }).total, 250);
 });
 
+test('label and text filters drop invisible characters the way ops does before storing', () => {
+  /** Characters by code point, so this source holds no invisible characters (or escapes a tool could decode). */
+  const ch = (...cps) => String.fromCodePoint(...cps);
+  const ZWSP = ch(0x200b);
+  const technologist = ch(0x1f469, 0x200d, 0x1f4bb); // woman technologist: two emoji joined by a ZWJ
+  const ctx = ctxWith();
+  apply(ctx, createTask(ctx, { title: 'Profile page', labels: [`${technologist} frontend`, `bug${ZWSP}`, `caf${ch(0xe9)}`] }));
+  assert.deepEqual(ctx.state.tasks[1].labels, [`${ch(0x1f469, 0x1f4bb)} frontend`, 'bug', `caf${ch(0xe9)}`]); // as ops stores them
+  const ids = (f) => listTasks(ctx.state, ctx.reg, f).items.map((i) => i.id);
+  assert.deepEqual(ids({ label: `${technologist} frontend` }), [1]);
+  assert.deepEqual(ids({ label: `bug${ZWSP}` }), [1]);
+  assert.deepEqual(ids({ label: `B${ch(0xe0041)}UG` }), [1]); // a tag character, invisible
+  assert.deepEqual(ids({ label: `CAFE${ch(0x301)}` }), [1]); // decomposed: an accent typed as a combining mark
+  assert.deepEqual(ids({ text: `profile${ZWSP} ${ch(0x202e)}page` }), [1]); // a zero-width space and a bidi override
+  assert.deepEqual(ids({ label: ZWSP }), [1]); // nothing visible: no filter
+});
+
 test('label and text filters are forgiving about case and spacing', () => {
   const ctx = ctxWith({
     tasks: [
       { id: 1, title: 'Vegetarian filter', labels: ['good first issue'] },
       { id: 2, title: 'Password reset', description: 'Send a reset link by e-mail.' },
+      { id: 3, title: 'Recipe API', description: 'Keep the\n  old endpoint.' },
       { id: 12, title: 'Search' },
     ],
   });
   const ids = (f) => listTasks(ctx.state, ctx.reg, f).items.map((i) => i.id);
   assert.deepEqual(ids({ label: '  Good  First\tISSUE ' }), [1]);
   assert.deepEqual(ids({ text: ' RESET LINK ' }), [2]);
+  assert.deepEqual(ids({ text: 'the old  endpoint' }), [3]); // spaces and line breaks match each other
   assert.deepEqual(ids({ text: '12' }), [12]); // a number finds the id, not titles that contain it
   assert.deepEqual(ids({ text: '# 12' }), []);
 });
