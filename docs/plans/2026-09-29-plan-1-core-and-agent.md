@@ -3620,7 +3620,7 @@ Expected: FAIL, module not found.
 `src/hooks/run.js`:
 ```js
 import fs from 'node:fs';
-import { endAgent, touchAgent } from '../core/agents.js';
+import { currentHost, endAgent, touchAgent } from '../core/agents.js';
 import { rulesPath } from '../core/config.js';
 import { lockConflict, recordTouch } from '../core/locks.js';
 import { inheritClaim, maintenance } from '../core/maintenance.js';
@@ -3686,13 +3686,19 @@ export function runHook(input, opts = {}) {
   }
 }
 
+/** Housekeeping for transact's `before`: it runs first and its events are applied before the operation (§10). */
+function housekeeping(board, host) {
+  return (state, reg, now) => maintenance(state, reg, board.config, now, { host });
+}
+
 function sessionStart({ board, input, cwd, env, now }) {
+  const host = currentHost(env);
   const { state, result } = transact(board, (state, reg) => {
-    const agent = touchAgent(reg, { id: input.session_id, folder: cwd, pid: hostPid(env), branch: currentBranch(board.gitDir) }, now);
-    const events = [...maintenance(state, reg, board.config, now), ...inheritClaim(state, reg, agent.id, cwd)];
+    const agent = touchAgent(reg, { id: input.session_id, folder: cwd, pid: hostPid(env), branch: currentBranch(board.gitDir), host }, now);
+    const events = inheritClaim(state, reg, agent.id, cwd);
     const since = advanceCursor(agent, now);
     return { events, registry: reg, result: { reg, since, name: agent.name } };
-  }, { now, timeoutMs: HOOK_LOCK_TIMEOUT_MS });
+  }, { now, timeoutMs: HOOK_LOCK_TIMEOUT_MS, before: housekeeping(board, host) });
   const rules = rulesPath(board.configRoot);
   return contextOutput('SessionStart', formatBrief({
     configProblems: board.configProblems,
@@ -3708,11 +3714,12 @@ function sessionStart({ board, input, cwd, env, now }) {
 }
 
 function promptSubmit({ board, input, cwd, env, now }) {
+  const host = currentHost(env);
   const { state, result } = transact(board, (state, reg) => {
-    const agent = touchAgent(reg, { id: input.session_id, folder: cwd, pid: hostPid(env) }, now);
+    const agent = touchAgent(reg, { id: input.session_id, folder: cwd, pid: hostPid(env), host }, now);
     const since = advanceCursor(agent, now);
-    return { events: maintenance(state, reg, board.config, now), registry: reg, result: { reg, since } };
-  }, { now, timeoutMs: HOOK_LOCK_TIMEOUT_MS });
+    return { registry: reg, result: { reg, since } };
+  }, { now, timeoutMs: HOOK_LOCK_TIMEOUT_MS, before: housekeeping(board, host) });
   const pings = whatsNew(state, result.reg, input.session_id, result.since);
   return contextOutput('UserPromptSubmit', formatPings(pings, board.config.maxPings));
 }
@@ -3740,10 +3747,11 @@ function preToolUse({ board, input, now }) {
 function postToolUse({ board, input, cwd, env, now }) {
   const tool = input.tool_name;
   if (!EDIT_TOOLS.has(tool) && tool !== 'TodoWrite') return '';
+  const host = currentHost(env);
   transact(board, (state, reg) => {
-    touchAgent(reg, { id: input.session_id, folder: cwd, pid: hostPid(env) }, now);
+    touchAgent(reg, { id: input.session_id, folder: cwd, pid: hostPid(env), host }, now);
     const ctx = { state, reg, cfg: board.config, agentId: input.session_id, now };
-    const events = maintenance(state, reg, board.config, now);
+    const events = [];
     if (tool === 'TodoWrite') {
       const todos = Array.isArray(input.tool_input?.todos) ? input.tool_input.todos : [];
       events.push(...syncChecklist(ctx, todos.map((t) => ({ text: t?.content, done: t?.status === 'completed' }))).events);
@@ -3755,7 +3763,7 @@ function postToolUse({ board, input, cwd, env, now }) {
       }
     }
     return { events, registry: reg };
-  }, { now, timeoutMs: HOOK_LOCK_TIMEOUT_MS });
+  }, { now, timeoutMs: HOOK_LOCK_TIMEOUT_MS, before: housekeeping(board, host) });
   return '';
 }
 
@@ -4018,7 +4026,7 @@ export function serveStdio(handle, { input = process.stdin, output = process.std
 ```js
 import fs from 'node:fs';
 import { NAME } from '../name.js';
-import { nameOf, resolveAgentId, touchAgent } from '../core/agents.js';
+import { currentHost, getAgent, nameOf, resolveAgentId, touchAgent } from '../core/agents.js';
 import { loadConfig } from '../core/config.js';
 import { COLUMN_LABELS, columnOf } from '../core/derive.js';
 import { maintenance } from '../core/maintenance.js';
@@ -4105,30 +4113,34 @@ function describe(t, reg) {
 export function buildTools(board, who) {
   const now = who.now ?? (() => Date.now());
   let knownId = null;
-  const lookup = (reg) => resolveAgentId(reg, { sessionId: who.sessionId, pid: who.pid, folder: who.folder }) ?? knownId;
+  const host = who.host ?? currentHost();
+  const lookup = (reg, t) => resolveAgentId(reg, { sessionId: who.sessionId, pid: who.pid, folder: who.folder, host }, t);
+  // The last agent this server acted for, but only while it is still live: never revive an ended agent.
+  const liveKnown = (reg) => (knownId && getAgent(reg, knownId)?.endedAt == null ? knownId : null);
 
   function identify(reg, t) {
-    const id = lookup(reg) ?? who.sessionId ?? `mcp-${process.pid}`;
+    const id = lookup(reg, t) ?? liveKnown(reg) ?? who.sessionId ?? `mcp-${process.pid}`;
     knownId = id;
-    const existing = reg.agents[id];
-    touchAgent(reg, { id, folder: existing?.folder ?? who.folder, pid: existing?.pid ?? who.pid ?? null }, t);
+    const existing = getAgent(reg, id);
+    // Touch with this server's own pid and host only: echoing a stored pid could end the session's live agent (§4).
+    touchAgent(reg, { id, folder: existing?.folder ?? who.folder, pid: who.pid ?? null, host }, t);
     return id;
   }
 
   function write(op, args) {
+    const at = now();
+    // Re-read config on every call so an edit takes effect without restarting the server (§7).
+    const cfg = loadConfig(board.configRoot);
     return transact(board, (state, reg, t) => {
       const agentId = identify(reg, t);
-      // Re-read config on every call so an edit takes effect without restarting the server (§7).
-      const cfg = loadConfig(board.configRoot);
-      const housekeeping = maintenance(state, reg, cfg, t);
       const out = op({ state, reg, cfg, agentId, now: t }, args);
-      return { events: [...housekeeping, ...out.events], registry: reg, result: { ...out.result, agentId } };
-    }, { now: now() });
+      return { events: out.events, registry: reg, result: { ...out.result, agentId } };
+    }, { now: at, before: (state, reg, t) => maintenance(state, reg, cfg, t, { host }) });
   }
 
   function read() {
     const reg = readRegistry(board);
-    return { reg, state: readState(board), agentId: lookup(reg) };
+    return { reg, state: readState(board), agentId: lookup(reg, now()) ?? liveKnown(reg) };
   }
 
   function guard(name, fn) {
