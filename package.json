@@ -1,0 +1,15 @@
+{
+  "name": "agentboard",
+  "version": "0.1.0",
+  "description": "A local task board for AI coding agents.",
+  "type": "module",
+  "license": "MIT",
+  "private": true,
+  "engines": { "node": ">=22" },
+  "bin": { "agentboard": "src/cli.js" },
+  "files": ["src/", ".claude-plugin/", "hooks/", "skills/", ".mcp.json", "LICENSE", "README.md"],
+  "scripts": {
+    "test": "node --test \"test/**/*.test.js\"",
+    "check:leaks": "node scripts/check-denylist.mjs --all"
+  }
+}
