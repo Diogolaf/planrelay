@@ -427,23 +427,23 @@ test('snippet collapses whitespace, stays within 280 characters and never splits
 
 test('a snapshot kept up to date event by event equals a fresh replay of the log', () => {
   const events = [
-    created(1), created(2, { origin: 'agent', createdBy: 'a2', approved: false, labels: ['bug'] }),
-    created(3, { kind: 'epic', description: undefined, dependsOn: undefined }),
+    created(1), created(2, { origin: 'agent', createdBy: 'a2', createdByName: ' Jade ', approved: false, labels: ['bug'] }),
+    created(3, { kind: 'epic', description: undefined, dependsOn: undefined, requestedVia: 'a1', requestedViaName: undefined }),
     ev('task.updated', { id: 2, changes: { parent: 3, title: undefined, links: [{ title: 'Spec', target: 'docs/x.md' }] } }),
     ev('task.approved', { id: 2, approved: true }),
-    ev('task.claimed', { id: 1, agent: 'a1', folder: undefined }),
+    ev('task.claimed', { id: 1, agent: 'a1', folder: undefined, agentName: 'Amber' }),
     ev('task.file', { id: 1, path: 'src/a.js', by: undefined }),
     ev('task.checklist', { id: 1, items: [{ text: 'A', done: true }, { text: 'B' }] }),
     msg('m1', 1, 'question', { to: undefined }),
-    msg('m2', 1, 'answer', { replyTo: 'm1', author: 'a2', mentions: undefined }),
-    msg('m3', 1, 'question', { to: 'human' }),
+    msg('m2', 1, 'answer', { replyTo: 'm1', author: 'a2', authorName: 'Jade', mentions: undefined }),
+    msg('m3', 1, 'question', { to: 'human', authorName: undefined }),
     msg('m4', 1, 'handoff', { about: undefined }),
     msg('m5', 2, 'comment', { id: undefined, author: undefined, kind: undefined }), // ignored: no id or kind
     msg('m5b', 2, 'comment', { author: undefined, to: undefined, replyTo: undefined, text: undefined }),
     ev('task.released', { id: 1, reason: 'manual' }),
-    ev('task.claimed', { id: 1, agent: 'a2', folder: '/w' }, 'a2'),
+    ev('task.claimed', { id: 1, agent: 'a2', folder: '/w', agentName: 'x'.repeat(61) }, 'a2'),
     msg('m6', 1, 'summary', { text: `Done ${String.fromCodePoint(0x1f600)}` }),
-    { ...ev('task.completed', { id: 1, summary: undefined }), actor: undefined },
+    { ...ev('task.completed', { id: 1, summary: undefined, completedByName: 'Jade' }), actor: undefined },
     msg('m7', 2, 'system', { author: 'system', about: 'unblocked', closesQuestions: true, text: '#1 is done.' }),
     { seq: ++seq, type: 'task.file', data: { id: 2, path: 'src/b.js' } }, // no at, no actor
     null, { type: 'task.created' }, created(1, { title: 'Duplicate' }), ev('future.type', { id: 1 }),
@@ -464,6 +464,62 @@ test('a snapshot kept up to date event by event equals a fresh replay of the log
   assert.equal(replayed.tasks[4], undefined);
   assert.equal(replayed.tasks[2].messageCount, 2); // m5b and m7; m5 had no id or kind
   assert.equal(replayed.tasks[2].files[0].at, null);
+  assert.deepEqual(
+    [replayed.tasks[2].createdByName, replayed.tasks[3].requestedVia, replayed.tasks[3].requestedViaName],
+    ['Jade', 'a1', null],
+  );
+  assert.deepEqual([replayed.tasks[1].assigneeName, replayed.tasks[1].completedByName], [null, 'Jade']);
+  assert.deepEqual(replayed.messages.slice(0, 3).map((m) => m.authorName), [null, 'Jade', null]);
+});
+
+test('creation events carry display names: trimmed, up to 60 characters, else ignored', () => {
+  const s = board(
+    created(1, { origin: 'agent', createdBy: 'a1', createdByName: '  Amber  ', approved: false }),
+    created(2, { requestedVia: 'a2', requestedViaName: 'Jade' }),
+    created(3, { createdByName: 'x'.repeat(61), requestedVia: '', requestedViaName: '   ' }),
+    created(4, { createdByName: 7, requestedVia: ['a1'], requestedViaName: { name: 'Jade' } }),
+    created(5, { createdByName: 'y'.repeat(60), requestedVia: ' a3 ' }),
+    created(6, { assigneeName: 'Amber', completedByName: 'Amber' }), // not creation fields
+  );
+  const names = (t) => [t.createdByName, t.requestedVia, t.requestedViaName];
+  assert.deepEqual(names(s.tasks[1]), ['Amber', null, null]);
+  assert.deepEqual(names(s.tasks[2]), [null, 'a2', 'Jade']);
+  assert.deepEqual(names(s.tasks[3]), [null, null, null]);
+  assert.deepEqual(names(s.tasks[4]), [null, null, null]);
+  assert.deepEqual(names(s.tasks[5]), ['y'.repeat(60), ' a3 ', null]); // an id is kept exactly as given
+  assert.deepEqual([s.tasks[6].assigneeName, s.tasks[6].completedByName], [null, null]);
+  applyEvent(s, ev('task.updated', { id: 1, changes: { createdByName: 'Jade', requestedViaName: 'Jade', assigneeName: 'Jade' } }));
+  assert.deepEqual([s.tasks[1].createdByName, s.tasks[1].requestedViaName, s.tasks[1].assigneeName], ['Amber', null, null]);
+});
+
+test("a claim stores the holder's name; release and completion clear it; completion stores its own name", () => {
+  const s = board(created(1));
+  applyEvent(s, ev('task.claimed', { id: 1, agent: 'a1', folder: '/w', agentName: ' Amber ' }));
+  assert.equal(s.tasks[1].assigneeName, 'Amber');
+  applyEvent(s, ev('task.released', { id: 1, reason: 'manual' }));
+  assert.equal(s.tasks[1].assigneeName, null);
+  applyEvent(s, ev('task.claimed', { id: 1, agent: 'a1', folder: '/w', agentName: 'Amber' }));
+  applyEvent(s, ev('task.claimed', { id: 1, agent: 'a2', folder: '/w' }, 'a2')); // a claim without a name forgets the old one
+  assert.deepEqual([s.tasks[1].assignee, s.tasks[1].assigneeName], ['a2', null]);
+  applyEvent(s, ev('task.claimed', { id: 1, agent: 'a2', folder: '/w', agentName: 42 }, 'a2'));
+  assert.equal(s.tasks[1].assigneeName, null);
+  applyEvent(s, ev('task.claimed', { id: 1, agent: 'a2', folder: '/w', agentName: 'Jade' }, 'a2'));
+  applyEvent(s, ev('task.completed', { id: 1, summary: 'Done.', completedByName: 'Jade' }, 'a2'));
+  const t = s.tasks[1];
+  assert.deepEqual([t.assignee, t.assigneeName, t.completedBy, t.completedByName], [null, null, 'a2', 'Jade']);
+  const s2 = board(created(1));
+  applyEvent(s2, ev('task.completed', { id: 1, summary: 'Done.', completedByName: 'z'.repeat(61) }));
+  assert.equal(s2.tasks[1].completedByName, null);
+});
+
+test("message headers carry the author's display name", () => {
+  const s = board(created(1));
+  applyEvent(s, msg('m1', 1, 'comment', { authorName: ' Amber ' }));
+  applyEvent(s, msg('m2', 1, 'comment'));
+  applyEvent(s, msg('m3', 1, 'comment', { authorName: 'n'.repeat(61) }));
+  applyEvent(s, msg('m4', 1, 'comment', { authorName: ['Amber'] }));
+  applyEvent(s, msg('m5', 1, 'system', { author: 'system', authorName: '' }));
+  assert.deepEqual(s.messages.map((m) => m.authorName), ['Amber', null, null, null, null]);
 });
 
 test('duplicate dependsOn ids are collapsed, on create and on update', () => {

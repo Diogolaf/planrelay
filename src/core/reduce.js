@@ -1,20 +1,24 @@
 /**
+ * Names (createdByName, requestedViaName, assigneeName, completedByName, authorName) are display names
+ * as they were when the event was written, so history stays readable after the registry forgets an agent
+ * (§4); null when the event had none. requestedVia: the agent that relayed a task the human asked for.
  * @typedef {{ text: string, done: boolean }} ChecklistItem
  * @typedef {{ id: string, to: string, author: string | null, at: number | null, text: string }} OpenQuestion
  * @typedef {{
  *   id: number, kind: 'task' | 'epic', title: string, description: string, parent: number | null,
- *   labels: string[], dependsOn: number[], origin: 'human' | 'agent', createdBy: string, approved: boolean,
- *   rank: number, assignee: string | null, claim: { folder: string | null, since: number | null } | null,
- *   done: boolean, doneAt: number | null, completedBy: string | null, summary: string | null,
+ *   labels: string[], dependsOn: number[], origin: 'human' | 'agent', createdBy: string, createdByName: string | null,
+ *   requestedVia: string | null, requestedViaName: string | null, approved: boolean, rank: number,
+ *   assignee: string | null, assigneeName: string | null, claim: { folder: string | null, since: number | null } | null,
+ *   done: boolean, doneAt: number | null, completedBy: string | null, completedByName: string | null, summary: string | null,
  *   checklist: ChecklistItem[], files: { path: string, by: string | null, at: number | null }[],
  *   links: { title: string, target: string }[], openQuestions: OpenQuestion[],
  *   lastHandoff: { author: string | null, at: number | null, kind: string, text: string } | null,
  *   messageCount: number, createdAt: number | null, updatedAt: number | null
  * }} Task
  * @typedef {{ seq: number, at: number | null, type: string, taskId: number, actor: string | null, text: string }} Activity
- * @typedef {{ id: string, taskId: number, author: string | null, kind: string, to: string | null, replyTo: string | null,
- *   replyToAuthor: string | null, mentions: number[], relayedFromHuman: boolean, about: string | null,
- *   at: number | null, text: string }} MessageHeader
+ * @typedef {{ id: string, taskId: number, author: string | null, authorName: string | null, kind: string,
+ *   to: string | null, replyTo: string | null, replyToAuthor: string | null, mentions: number[],
+ *   relayedFromHuman: boolean, about: string | null, at: number | null, text: string }} MessageHeader
  * @typedef {{ schema: number, seq: number, nextId: number, eventsSize: number,
  *   tasks: Record<number, Task>, recent: Activity[], messages: MessageHeader[] }} BoardState
  * @typedef {{ seq: number, at: number, type: string, actor: string, data: any }} BoardEvent
@@ -26,11 +30,18 @@ export const MESSAGE_RING = 300;
 /** Files listed per task; touchTaskFile stops recording there, and the UI shows "200+". */
 export const FILES_LIMIT = 200;
 const SNIPPET = 280;
+/** Display names in events longer than this are ignored. */
+const NAME_MAX = 60;
 
 const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const isId = (v) => Number.isSafeInteger(v) && v >= 1;
 const isStr = (v) => typeof v === 'string';
 const strOrNull = (v) => (isStr(v) ? v : null);
+/** A display name: trimmed, 1 to NAME_MAX characters; undefined when unusable. */
+const displayName = (v) => {
+  const s = isStr(v) ? v.trim() : '';
+  return s !== '' && s.length <= NAME_MAX ? s : undefined;
+};
 
 /** Each settable task field: the clean value, or undefined when the value is unusable. */
 const FIELDS = {
@@ -46,11 +57,17 @@ const FIELDS = {
     : undefined),
   origin: (v) => (v === 'human' || v === 'agent' ? v : undefined),
   createdBy: (v) => (isStr(v) ? v : undefined),
+  createdByName: displayName,
+  requestedVia: (v) => (isStr(v) && v !== '' ? v : undefined), // an agent id: kept exactly as given
+  requestedViaName: displayName,
   approved: (v) => (typeof v === 'boolean' ? v : undefined),
   rank: (v) => (Number.isFinite(v) ? v : undefined),
 };
 /** What task.created may set (the event table); derived state always starts from newTask's defaults. */
-const CREATE_FIELDS = ['id', 'kind', 'title', 'description', 'parent', 'labels', 'dependsOn', 'links', 'origin', 'createdBy', 'approved', 'rank'];
+const CREATE_FIELDS = [
+  'id', 'kind', 'title', 'description', 'parent', 'labels', 'dependsOn', 'links', 'origin', 'createdBy', 'createdByName',
+  'requestedVia', 'requestedViaName', 'approved', 'rank',
+];
 /** The only fields task.updated may change. */
 const EDITABLE = ['title', 'description', 'parent', 'labels', 'dependsOn', 'rank', 'links'];
 /** Task fields that must always be arrays. */
@@ -96,8 +113,8 @@ export function newTask(fields) {
   /** @type {any} */
   const t = {
     id: 0, kind: 'task', title: '', description: '', parent: null, labels: [], dependsOn: [],
-    origin: 'human', createdBy: 'human', approved: true, rank: 0,
-    assignee: null, claim: null, done: false, doneAt: null, completedBy: null, summary: null,
+    origin: 'human', createdBy: 'human', createdByName: null, requestedVia: null, requestedViaName: null, approved: true, rank: 0,
+    assignee: null, assigneeName: null, claim: null, done: false, doneAt: null, completedBy: null, completedByName: null, summary: null,
     checklist: [], files: [], links: [], openQuestions: [], lastHandoff: null, messageCount: 0,
     createdAt: 0, updatedAt: 0,
     ...fields,
@@ -150,17 +167,20 @@ export function applyEvent(state, ev) {
     case 'task.claimed':
       if (!isStr(d.agent)) return state;
       task.assignee = d.agent;
+      task.assigneeName = displayName(d.agentName) ?? null;
       task.claim = { folder: strOrNull(d.folder), since: at };
       log('claimed', task.id, task.title);
       break;
     case 'task.released':
       task.assignee = null;
+      task.assigneeName = null;
       task.claim = null;
       log(d.reason === 'folder-missing' || d.reason === 'timeout' ? 'auto-released' : 'released', task.id, task.title);
       break;
     case 'task.completed':
       Object.assign(task, {
-        done: true, doneAt: at, completedBy: actor, summary: strOrNull(d.summary), assignee: null, claim: null, openQuestions: [],
+        done: true, doneAt: at, completedBy: actor, completedByName: displayName(d.completedByName) ?? null,
+        summary: strOrNull(d.summary), assignee: null, assigneeName: null, claim: null, openQuestions: [],
       });
       log('completed', task.id, task.title);
       break;
@@ -208,7 +228,7 @@ function applyMessage(state, m, at, log) {
   push(
     state.messages,
     {
-      id: m.id, taskId: task.id, author, kind: m.kind, to, replyTo, replyToAuthor,
+      id: m.id, taskId: task.id, author, authorName: displayName(m.authorName) ?? null, kind: m.kind, to, replyTo, replyToAuthor,
       mentions: Array.isArray(m.mentions) ? m.mentions.filter(isId) : [], relayedFromHuman: m.relayedFromHuman === true, about,
       at, text: snippet(m.text),
     },
