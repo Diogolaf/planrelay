@@ -1,0 +1,3 @@
+#!/bin/sh
+# Leak guard: the commit message must not contain private terms.
+exec node scripts/check-denylist.mjs --message "$1"

@@ -1,0 +1,3 @@
+#!/bin/sh
+# Leak guard for merge commits: the same checks as pre-commit.
+exec sh "$(dirname "$0")/pre-commit"

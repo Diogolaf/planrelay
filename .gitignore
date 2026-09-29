@@ -8,5 +8,9 @@ CLAUDE.local.md
 *.log
 .env
 .env.*
-# npm pack output (checked in CI, never committed)
+!.env.example
+.vscode/
+.idea/
+*.code-workspace
+# npm pack output (never committed)
 *.tgz

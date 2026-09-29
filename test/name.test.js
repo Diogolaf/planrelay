@@ -9,7 +9,7 @@ test('name constants are the single rename point', () => {
 });
 
 test('package metadata uses the same name', () => {
-  const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+  const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
   assert.equal(pkg.name, NAME);
   assert.deepEqual(Object.keys(pkg.bin), [NAME]);
 });
