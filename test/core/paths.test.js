@@ -276,6 +276,31 @@ test('outside git a subfolder reuses the board of the nearest project folder', (
   assert.equal(resolveBoard(lib, opts).repoRoot, lib);
 });
 
+test('outside git the search for a board stops at the host project folder', () => {
+  const base = track(tempDir());
+  const home = track(tempDir());
+  const opts = isolated(base, home);
+  const parent = path.join(base, 'workspace');
+  const app = path.join(parent, 'app');
+  const src = path.join(app, 'src');
+  const pkg = path.join(app, 'pkg');
+  fs.mkdirSync(src, { recursive: true });
+  fs.mkdirSync(path.join(pkg, '.agentboard'), { recursive: true });
+  fs.mkdirSync(path.join(pkg, 'x'));
+  const own = resolveBoard(app, opts).boardDir;
+  fs.mkdirSync(resolveBoard(parent, opts).boardDir, { recursive: true }); // a parent of the project already has a board
+
+  const inside = resolveBoard(src, { ...opts, projectDir: app });
+  assert.equal(inside.boardDir, own);
+  assert.equal(inside.repoRoot, app);
+  assert.equal(resolveBoard(app, { ...opts, projectDir: app }).boardDir, own);
+  // a marker between the folder and the project folder still wins
+  assert.equal(resolveBoard(path.join(pkg, 'x'), { ...opts, projectDir: app }).repoRoot, pkg);
+  // without a project folder, or from outside it, the walk goes on to the parent's board
+  assert.equal(resolveBoard(src, opts).repoRoot, parent);
+  assert.equal(resolveBoard(src, { ...opts, projectDir: path.join(base, 'other') }).repoRoot, parent);
+});
+
 test('the project name of a bare repository with worktrees drops .git, and a .bare folder takes its parent name', () => {
   const origin = track(tempRepo());
   const base = track(tempDir());

@@ -160,22 +160,28 @@ function repoName(commonDir) {
 
 /**
  * The folder a board belongs to outside git, so that `cd` into a subfolder keeps the same board:
- * the nearest folder, from `abs` up, that has a `.agentboard/` folder or already has a board; else
- * `projectDir` when `abs` lies inside it; else `abs`. Above `abs`, the walk never considers a
- * file-system root, the home folder or its parents (the home folder holds the global
- * `.agentboard/`, and one board there would swallow every folder below it), or a
- * GIT_CEILING_DIRECTORIES entry, and stops there.
+ * the nearest folder, from `abs` up, that has a `.agentboard/` folder or already has a board.
+ * - Inside `projectDir` (the host's project folder), the search ends at `projectDir`, which is
+ *   also the answer when nothing below it matches.
+ * - Otherwise the search goes further up, but never considers a file-system root, the home folder
+ *   or its parents (the home folder holds the global `.agentboard/`, and one board there would
+ *   swallow every folder below it), or a GIT_CEILING_DIRECTORIES entry, and stops there; when
+ *   nothing matches, the answer is `abs`.
  * @returns {{ root: string, key: string }} root in the caller's spelling where possible; key hashes to the board folder
  */
 function nonGitFolder(abs, { home, ceilings, projectDir }) {
   const real = realOrSelf(abs);
+  const project = projectDir ? path.resolve(projectDir) : null;
+  const projectKey = project === null ? null : pathKey(project);
+  const inProject = projectKey !== null && within(fold(real), projectKey);
   const homeKey = fold(realOrSelf(home));
   const boards = path.join(home, CONFIG_DIR, 'boards');
   // Every parent of a real path is a real path, so parents need no realpath call of their own.
   let dir = real;
   for (let up = 0; ; up++) {
     const key = fold(dir);
-    if (up > 0 && (path.dirname(dir) === dir || within(homeKey, key) || ceilings.has(key))) break;
+    if (!inProject && up > 0 && (path.dirname(dir) === dir || within(homeKey, key) || ceilings.has(key))) break;
+    if (inProject && key === projectKey) return { root: project, key };
     if (isDir(path.join(dir, CONFIG_DIR)) || isDir(path.join(boards, sha256(key)))) {
       if (up === 0) return { root: abs, key };
       let spelled = abs;
@@ -185,11 +191,6 @@ function nonGitFolder(abs, { home, ceilings, projectDir }) {
     const parent = path.dirname(dir);
     if (parent === dir) break;
     dir = parent;
-  }
-  if (projectDir) {
-    const project = path.resolve(projectDir);
-    const key = pathKey(project);
-    if (within(fold(real), key)) return { root: project, key };
   }
   return { root: abs, key: fold(real) };
 }
