@@ -40,7 +40,7 @@ const FIELDS = {
   description: (v) => (isStr(v) ? v : undefined),
   parent: (v) => (v === null || isId(v) ? v : undefined),
   labels: (v) => (Array.isArray(v) ? v.filter(isStr) : undefined),
-  dependsOn: (v) => (Array.isArray(v) ? v.filter(isId) : undefined),
+  dependsOn: (v) => (Array.isArray(v) ? [...new Set(v.filter(isId))] : undefined),
   links: (v) => (Array.isArray(v)
     ? v.filter((l) => isObj(l) && isStr(l.title) && isStr(l.target)).map((l) => ({ title: l.title, target: l.target }))
     : undefined),

@@ -465,3 +465,10 @@ test('a snapshot kept up to date event by event equals a fresh replay of the log
   assert.equal(replayed.tasks[2].messageCount, 2); // m5b and m7; m5 had no id or kind
   assert.equal(replayed.tasks[2].files[0].at, null);
 });
+
+test('duplicate dependsOn ids are collapsed, on create and on update', () => {
+  const s = board(created(1, { dependsOn: [2, 3, 2, 3, 2] }));
+  assert.deepEqual(s.tasks[1].dependsOn, [2, 3]);
+  applyEvent(s, ev('task.updated', { id: 1, changes: { dependsOn: [4, 4, 5] } }));
+  assert.deepEqual(s.tasks[1].dependsOn, [4, 5]);
+});
