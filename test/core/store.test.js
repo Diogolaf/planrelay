@@ -231,6 +231,9 @@ test('bad transact input is refused before anything is written', () => {
   assert.throws(() => transact(b, () => ({ events: createEv(2) })), /must be an array/);
   assert.throws(() => transact(b, () => ({ events: [createEv(2)], registry: new Map() })), /plain object/);
   assert.throws(() => transact(b, () => ({ events: [createEv(2)], registry: [] })), /plain object/);
+  assert.throws(() => transact(b, () => ({ events: [createEv(2)] }), { before: 'maintenance' }), /before must be a function/);
+  assert.throws(() => transact(b, () => ({ events: [createEv(2)] }), { before: () => createEv(3) }), /before events must be an array/);
+  assert.throws(() => transact(b, () => ({ events: [createEv(2)] }), { before: async () => [] }), /before must be synchronous/);
   // A stamped event must be a valid event: here the next seq would not be a safe integer.
   const snap = JSON.parse(fs.readFileSync(b.files.state, 'utf8'));
   fs.writeFileSync(b.files.state, JSON.stringify({ ...snap, seq: Number.MAX_SAFE_INTEGER }));
@@ -360,6 +363,87 @@ test('a misshapen registry reads as empty parts', () => {
   assert.deepEqual(readRegistry(b), { agents: {}, activity: { 1: T0 }, touches: {} });
   fs.writeFileSync(b.files.agents, '[1, 2]');
   assert.deepEqual(readRegistry(b), { agents: {}, activity: {}, touches: {} });
+});
+
+test('malformed registry entries are dropped, so one bad entry cannot make every write throw', () => {
+  const b = openBoard(tempRepo());
+  fs.mkdirSync(b.dir, { recursive: true });
+  const touch = { agent: 'a1', task: 1, at: T0 };
+  fs.writeFileSync(b.files.agents, JSON.stringify({
+    agents: { a1: { id: 'a1' }, '': { id: '' }, a2: null, a3: 'x', a4: [1] },
+    activity: { 1: T0, 2: 'soon', 3: null, 4: {} },
+    touches: { 'src/a.js': touch, 'src/b.js': null, 'src/c.js': 5, 'src/d.js': ['a1'] },
+    version: 3, // other top-level keys are kept
+  }));
+  const clean = { agents: { a1: { id: 'a1' } }, activity: { 1: T0 }, touches: { 'src/a.js': touch }, version: 3 };
+  assert.deepEqual(readRegistry(b), clean);
+  // A write that walks every agent works, and saves the cleaned registry.
+  const out = transact(b, (s, reg) => ({ result: Object.values(reg.agents).map((a) => a.id), registry: reg }));
+  assert.deepEqual(out.result, ['a1']);
+  assert.deepEqual(JSON.parse(fs.readFileSync(b.files.agents, 'utf8')), clean);
+  // A "__proto__" id stays an ordinary entry and never replaces the prototype.
+  fs.writeFileSync(b.files.agents, '{"agents":{"__proto__":{"id":"p"}}}');
+  const reg = readRegistry(b);
+  assert.equal(Object.getPrototypeOf(reg.agents), Object.prototype);
+  assert.ok(Object.hasOwn(reg.agents, '__proto__'));
+});
+
+test('housekeeping (before) runs first: fn sees its effects, and both are written as one batch', () => {
+  const b = openBoard(tempRepo());
+  transact(b, () => ({ events: [createEv(1), { type: 'task.claimed', actor: 'a1', data: { id: 1, agent: 'a1', folder: null } }] }));
+  const before = (s, reg) => {
+    reg.touches['src/old.js'] = { agent: 'a1', task: 1, at: T0 };
+    return s.tasks[1].assignee ? [
+      { type: 'task.released', actor: 'system', data: { id: 1, reason: 'timeout' } },
+      post(1, 'Released after 24 h without activity', 'system'),
+    ] : [];
+  };
+  let seen = null;
+  const out = transact(b, (s, reg) => {
+    seen = { assignee: s.tasks[1].assignee, seq: s.seq, touched: Object.hasOwn(reg.touches, 'src/old.js') };
+    return { events: [{ type: 'task.claimed', actor: 'a2', data: { id: 1, agent: 'a2', folder: null } }], registry: reg };
+  }, { before, now: T0 });
+  assert.deepEqual(seen, { assignee: null, seq: 4, touched: true }); // the released claim is gone
+  assert.deepEqual(out.events.map((e) => [e.seq, e.tx, e.n, e.type]),
+    [[3, 3, 3, 'task.released'], [4, 3, 3, 'message.posted'], [5, 3, 3, 'task.claimed']]);
+  assert.deepEqual(logLines(b).slice(2).map((l) => JSON.parse(l)).map((e) => [e.seq, e.tx, e.n]), [[3, 3, 3], [4, 3, 3], [5, 3, 3]]);
+  assert.equal(out.state.tasks[1].assignee, 'a2');
+  assert.deepEqual(readMessages(b, 1).map((m) => [m.id, m.text]), [['m4', 'Released after 24 h without activity']]);
+  assert.equal(readRegistry(b).touches['src/old.js'].agent, 'a1');
+  assert.deepStrictEqual(readState(b), replay(b, { messages: false }).state);
+  assert.deepEqual(repair(b).bad, []);
+});
+
+test('if fn throws, the housekeeping events are not written either', () => {
+  const b = openBoard(tempRepo());
+  transact(b, () => ({ events: [createEv(1)] }));
+  const log = fs.readFileSync(b.files.events, 'utf8');
+  const fail = () => { throw new Error('operation refused (test)'); };
+  assert.throws(() => transact(b, fail, { before: (s, reg) => { reg.agents.x = { id: 'x' }; return [createEv(2)]; } }), /operation refused/);
+  assert.equal(fs.readFileSync(b.files.events, 'utf8'), log);
+  assert.deepEqual(Object.keys(readState(b).tasks), ['1']);
+  assert.equal(fs.existsSync(b.files.agents), false);
+});
+
+test('on a fence re-run, housekeeping runs again on the rebuilt state', () => {
+  const b = openBoard(tempRepo());
+  transact(b, () => ({ events: [createEv(1)] }));
+  const seenByBefore = [];
+  let calls = 0;
+  const out = transact(b, (s) => {
+    if (calls++ === 0) fs.appendFileSync(b.files.events, JSON.stringify({ seq: 2, at: T0, ...createEv(2, 'foreign') }) + '\n');
+    return { events: [createEv(s.nextId)] };
+  }, {
+    before: (s) => {
+      seenByBefore.push(s.seq);
+      return [post(1, `sweep after seq ${s.seq}`, 'system')];
+    },
+  });
+  assert.deepEqual(seenByBefore, [1, 2]);
+  assert.deepEqual(out.events.map((e) => [e.seq, e.tx, e.n, e.type]), [[3, 3, 2, 'message.posted'], [4, 3, 2, 'task.created']]);
+  assert.equal(out.state.tasks[3].id, 3);
+  assert.deepEqual(readMessages(b, 1).map((m) => m.text), ['sweep after seq 2']);
+  assert.deepStrictEqual(readState(b), replay(b, { messages: false }).state);
 });
 
 test('the registry is saved only when returned', () => {

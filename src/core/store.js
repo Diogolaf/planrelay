@@ -61,12 +61,27 @@ export function emptyRegistry() {
   return { agents: {}, activity: {}, touches: {} };
 }
 
-/** The saved registry; a missing, corrupt or misshapen part reads as empty. @param {Board} board @returns {Registry} */
+/** Which entries of each registry part are kept; anything else is dropped on read. */
+const REGISTRY_ENTRY = {
+  agents: (key, v) => key !== '' && isPlainObj(v),
+  activity: (key, v) => Number.isFinite(v),
+  touches: (key, v) => isPlainObj(v),
+};
+
+/**
+ * The saved registry. A missing, corrupt or misshapen part reads as empty, and malformed entries
+ * are dropped (an agent or touch that is not an object, an activity time that is not a number, an
+ * agent with an empty id), so one bad entry can never make every write throw. Other top-level
+ * keys are kept. @param {Board} board @returns {Registry}
+ */
 export function readRegistry(board) {
   const r = readJson(board.files.agents, null);
   if (!isObj(r)) return emptyRegistry();
   const reg = { ...r };
-  for (const [key, empty] of Object.entries(emptyRegistry())) if (!isObj(reg[key])) reg[key] = empty;
+  for (const [part, keep] of Object.entries(REGISTRY_ENTRY)) {
+    // fromEntries defines own properties, so a "__proto__" key can never replace the prototype.
+    reg[part] = isObj(r[part]) ? Object.fromEntries(Object.entries(r[part]).filter(([k, v]) => keep(k, v))) : {};
+  }
   return /** @type {Registry} */ (reg);
 }
 
@@ -370,31 +385,51 @@ function stamp(e, seq, tx, n, now) {
   return ev;
 }
 
-/** Runs fn on the state and a fresh registry, and checks and stamps what it returns. Writes nothing. */
-function prepare(board, state, fn, now) {
-  const ret = fn(state, readRegistry(board), now);
+/** The value a synchronous callback returned; a promise is refused (its work would run unlocked). */
+function synchronous(ret, who) {
   if (typeof ret?.then === 'function') {
     try { ret.then(undefined, () => {}); } catch { /* a broken thenable */ } // no second crash on a later rejection
-    throw new TypeError(`${NAME}: transact fn must be synchronous; it returned a promise, so nothing was written`);
+    throw new TypeError(`${NAME}: transact ${who} must be synchronous; it returned a promise, so nothing was written`);
   }
-  const out = ret ?? {};
+  return ret;
+}
+
+/**
+ * Runs `before` (housekeeping) and then fn on the state and a fresh registry, and checks, stamps and
+ * applies what they return, all as one batch: before's events come first and are applied before fn
+ * runs, so fn sees their effects. Writes nothing; a throw here commits nothing.
+ * @returns {{ out: any, events: BoardEvent[], accepted: any[] }} accepted: the messages the reducer took
+ */
+function prepare(board, state, fn, before, now) {
+  const registry = readRegistry(board);
+  const tx = state.seq + 1;
+  /** @type {BoardEvent[]} */
+  const events = [];
+  const accepted = [];
+  const add = (list, who) => {
+    if (!Array.isArray(list)) throw new TypeError(`${NAME}: transact ${who} events must be an array; nothing was written`);
+    list.forEach((e, i) => {
+      if (!isObj(e) || typeof e.type !== 'string') {
+        throw new TypeError(`${NAME}: event ${i} returned by transact ${who} has no string type; nothing was written`);
+      }
+      // Round-trip through JSON so what is applied now is exactly what a replay of the log would build.
+      // n is provisional: it is set on every event once the batch is complete.
+      const ev = JSON.parse(JSON.stringify(stamp(e, tx + events.length, tx, 0, now)));
+      if (!isEvent(ev)) throw new TypeError(`${NAME}: event ${i} returned by transact ${who} is not a valid event; nothing was written`);
+      events.push(ev);
+      const m = applyTracked(state, ev);
+      if (m) accepted.push(m);
+    });
+  };
+  if (before) add(synchronous(before(state, registry, now), 'before') ?? [], 'before');
+  const out = synchronous(fn(state, registry, now), 'fn') ?? {};
   if (!isObj(out)) throw new TypeError(`${NAME}: transact fn must return an object or nothing; nothing was written`);
-  const list = out.events ?? [];
-  if (!Array.isArray(list)) throw new TypeError(`${NAME}: transact events must be an array; nothing was written`);
   if (out.registry != null && !isPlainObj(out.registry)) {
     throw new TypeError(`${NAME}: the registry returned to transact must be a plain object; nothing was written`);
   }
-  const tx = state.seq + 1;
-  const events = list.map((e, i) => {
-    if (!isObj(e) || typeof e.type !== 'string') {
-      throw new TypeError(`${NAME}: event ${i} returned to transact has no string type; nothing was written`);
-    }
-    // Round-trip through JSON so what is applied now is exactly what a replay of the log would build.
-    const ev = JSON.parse(JSON.stringify(stamp(e, tx + i, tx, list.length, now)));
-    if (!isEvent(ev)) throw new TypeError(`${NAME}: event ${i} returned to transact is not a valid event; nothing was written`);
-    return ev;
-  });
-  return { out, events };
+  add(out.events ?? [], 'fn');
+  for (const ev of events) ev.n = events.length;
+  return { out, events, accepted };
 }
 
 /** The current snapshot, or a lenient rebuild when it is missing, corrupt or behind the log. */
@@ -431,6 +466,12 @@ function appendMessage(board, m) {
  * write; it may run again (with a fresh registry) if the log changed under the lock, so it must not
  * have other side effects that matter.
  *
+ * `opts.before(state, registry, now)`, when given, is housekeeping (§10): it runs first, under the
+ * same lock, and returns an array of events (it may also change the registry). They are stamped
+ * and applied before fn runs, so fn sees their effects, and they are written in the same batch,
+ * ahead of fn's events; if fn throws, none of them is written. It runs again with fn on a fence
+ * re-run. Like fn's own changes, its registry changes are saved only when fn returns the registry.
+ *
  * Order of a write (§6): agent registry, event append (the commit point: the whole batch or
  * nothing), message files, snapshot. A failure before the append throws and commits nothing (a
  * registry already written is harmless). A derived file that cannot be written, after the append
@@ -440,18 +481,24 @@ function appendMessage(board, m) {
  * @template R
  * @param {Board} board
  * @param {(state: BoardState, registry: Registry, now: number) => ({ events?: any[], registry?: Registry, result?: R } | void)} fn
- * @param {{ now?: number, timeoutMs?: number }} [opts] timeoutMs bounds the wait for the lock (hooks pass a short one)
+ * @param {{
+ *   now?: number, timeoutMs?: number,
+ *   before?: (state: BoardState, registry: Registry, now: number) => any[] | void
+ * }} [opts] timeoutMs bounds the wait for the lock (hooks pass a short one)
  * @returns {{ state: BoardState, events: BoardEvent[], result: R | undefined, degraded: string[] }}
  */
 export function transact(board, fn, opts = {}) {
+  const before = opts.before ?? null;
+  if (before !== null && typeof before !== 'function') throw new TypeError(`${NAME}: transact before must be a function`);
   return locked(board, () => {
     const now = opts.now ?? Date.now();
     const file = board.files.events;
     ensureNewlineAtEnd(file);
     let { state, degraded } = openState(board);
-    let { out, events } = prepare(board, state, fn, now);
+    let { out, events, accepted } = prepare(board, state, fn, before, now);
     // Fence: never append on top of events this state has not seen. The log can grow under the lock
-    // only when the lock was taken over as stale while still held; then rebuild and run fn again.
+    // only when the lock was taken over as stale while still held; then rebuild and run before and
+    // fn again. (prepare applied the events to `state` already; that leaves eventsSize alone.)
     for (let attempt = 1; events.length && fileSize(file) !== state.eventsSize; attempt++) {
       const found = fileSize(file);
       if (attempt >= FENCE_ATTEMPTS) {
@@ -460,9 +507,8 @@ export function transact(board, fn, opts = {}) {
       logError(board, 'fence', new Error(`the event log changed under the lock (${state.eventsSize} bytes seen, ${found} found); rebuilding`));
       ensureNewlineAtEnd(file);
       ({ state, degraded } = rebuild(board, false));
-      ({ out, events } = prepare(board, state, fn, now));
+      ({ out, events, accepted } = prepare(board, state, fn, before, now));
     }
-    const accepted = events.map((e) => applyTracked(state, e)).filter(Boolean);
     if (out.registry != null) writeJsonAtomic(board.files.agents, out.registry, { pretty: false });
     if (events.length) {
       const sizeBefore = state.eventsSize;
