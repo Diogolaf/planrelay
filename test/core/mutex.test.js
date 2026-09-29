@@ -8,7 +8,10 @@ import { withLock, pidAlive } from '../../src/core/mutex.js';
 import { HOUR, MIN, tempDir } from '../helpers.js';
 
 const mutexUrl = new URL('../../src/core/mutex.js', import.meta.url).href;
-/** Never a running process: above every platform's pid limit, and odd (Windows pids are multiples of 4). */
+/**
+ * Never a running process: far above any real pid on every platform. (Windows ignores a pid's
+ * low 2 bits, so what matters is the size of the value, not that it is odd.)
+ */
 const DEAD_PID = 2 ** 31 - 1;
 
 function run(args) {
@@ -19,7 +22,7 @@ function run(args) {
   });
 }
 
-/** Writes `<dir>/lock` (an object is stored as JSON) and backdates its mtime by `ageMs`. */
+/** Writes `<dir>/lock` (an object is stored as JSON) and backdates its mtime by `ageMs` (< 0: into the future). */
 function writeLock(dir, content, ageMs = 0) {
   const file = path.join(dir, 'lock');
   fs.writeFileSync(file, typeof content === 'string' ? content : JSON.stringify(content));
@@ -30,8 +33,8 @@ function writeLock(dir, content, ageMs = 0) {
   return file;
 }
 
-function eperm() {
-  return Object.assign(new Error('EPERM: operation not permitted (simulated)'), { code: 'EPERM' });
+function ioError(code) {
+  return Object.assign(new Error(`${code}: simulated`), { code });
 }
 
 test('withLock returns what fn returns, holding a lock that names this process', () => {
@@ -137,6 +140,16 @@ test('a lock time that is not a number, or far in the future, falls back to the 
   }
 });
 
+test('when the clock was stepped back past both the lock time and its mtime, a dead holder is taken over', () => {
+  const dead = tempDir();
+  writeLock(dead, { pid: DEAD_PID, at: Date.now() + HOUR }, -HOUR);
+  assert.equal(withLock(dead, () => 'ran'), 'ran');
+
+  const live = tempDir();
+  writeLock(live, { pid: process.pid, at: Date.now() + HOUR }, -HOUR);
+  assert.throws(() => withLock(live, () => 'never', { timeoutMs: 100 }), /locked/);
+});
+
 test('the timeout still fires, after sleeping between attempts, when a stale lock cannot be deleted', () => {
   const dir = tempDir();
   const file = writeLock(dir, { pid: DEAD_PID, at: Date.now() - MIN });
@@ -145,7 +158,7 @@ test('the timeout still fires, after sleeping between attempts, when a stale loc
     unlink(p) {
       if (p !== file) return fs.unlinkSync(p);
       attempts++;
-      throw eperm();
+      throw ioError('EPERM');
     },
   };
   const start = performance.now();
@@ -206,7 +219,7 @@ test('busy errors while creating the lock are retried on Windows and thrown else
   let failures = 3;
   const io = {
     create(p, body) {
-      if (p === file && failures-- > 0) throw eperm();
+      if (p === file && failures-- > 0) throw ioError('EPERM');
       fs.writeFileSync(p, body, { flag: 'wx' });
     },
   };
@@ -216,8 +229,69 @@ test('busy errors while creating the lock are retried on Windows and thrown else
 
 test('a busy error that lasts past the timeout is thrown when no lock file exists', () => {
   const dir = tempDir();
-  const io = { create: () => { throw eperm(); } };
+  const io = { create: () => { throw ioError('EPERM'); } };
   assert.throws(() => withLock(dir, () => 'never', { timeoutMs: 100, io }), { code: 'EPERM' });
+});
+
+test('access denied on create with no lock file in sight is thrown after about 2 s, not the full timeout', () => {
+  const dir = tempDir();
+  const io = { create: () => { throw ioError('EACCES'); } };
+  const start = performance.now();
+  assert.throws(() => withLock(dir, () => 'never', { timeoutMs: 20_000, io }), { code: 'EACCES' });
+  const elapsed = performance.now() - start;
+  if (process.platform === 'win32') assert.ok(elapsed >= 2000 && elapsed < 6000, `${elapsed} ms`);
+});
+
+test('access denied on create while a lock file is in sight waits for the full timeout', { skip: process.platform !== 'win32' && 'busy errors are only retried on Windows' }, () => {
+  const dir = tempDir();
+  writeLock(dir, { pid: process.pid, at: Date.now() });
+  const io = { create: () => { throw ioError('EPERM'); } };
+  const start = performance.now();
+  assert.throws(() => withLock(dir, () => 'never', { timeoutMs: 2500, io }), /locked/);
+  assert.ok(performance.now() - start >= 2500);
+});
+
+test('a lock that cannot be released after fn succeeded is reported with the result, and deleted next time', () => {
+  const dir = tempDir();
+  const file = path.join(dir, 'lock');
+  const cause = ioError('EIO');
+  const io = {
+    unlink(p) {
+      if (p === file) throw cause;
+      fs.unlinkSync(p);
+    },
+  };
+  assert.throws(
+    () => withLock(dir, () => 42, { io }),
+    (err) => err.code === 'ELOCKRELEASE' && err.result === 42 && err.cause === cause && err.message.includes(file),
+  );
+  assert.equal(fs.existsSync(file), true);
+  assert.equal(withLock(dir, () => 'next', { timeoutMs: 100 }), 'next'); // the orphaned lock is deleted first
+  assert.deepEqual(fs.readdirSync(dir), []);
+});
+
+test('the retried delete of an orphaned lock leaves alone a lock that replaced it', () => {
+  const dir = tempDir();
+  const file = path.join(dir, 'lock');
+  const io = {
+    unlink(p) {
+      if (p === file) throw ioError('EIO');
+      fs.unlinkSync(p);
+    },
+  };
+  assert.throws(() => withLock(dir, () => 'done', { io }), { code: 'ELOCKRELEASE' });
+  fs.unlinkSync(file);
+  writeLock(dir, { pid: process.pid, at: Date.now(), token: 'someone-else' });
+  assert.throws(() => withLock(dir, () => 'never', { timeoutMs: 100 }), /locked/);
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).token, 'someone-else');
+});
+
+test('an async fn is refused with a TypeError once the lock is released', async () => {
+  const dir = tempDir();
+  assert.throws(() => withLock(dir, async () => 'x'), (err) => err instanceof TypeError && /must be synchronous/.test(err.message));
+  assert.deepEqual(fs.readdirSync(dir), []);
+  assert.throws(() => withLock(dir, async () => { throw new Error('rejected later'); }), TypeError);
+  await new Promise((resolve) => setImmediate(resolve)); // the rejection must not surface as unhandled
 });
 
 test('pidAlive', () => {

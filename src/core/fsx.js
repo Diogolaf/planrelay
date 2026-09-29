@@ -5,7 +5,7 @@ import path from 'node:path';
 const IS_WIN = process.platform === 'win32';
 const BUSY_CODES = new Set(['EPERM', 'EBUSY', 'EACCES']);
 /** Total time the Windows retries below may wait before giving up. */
-const BUSY_RETRY_MS = 2_000;
+export const BUSY_RETRY_MS = 2_000;
 
 /** Blocks the thread without spinning the CPU. */
 export function sleepSync(ms) {

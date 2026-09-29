@@ -31,13 +31,40 @@ test('writeFileAtomic replaces an existing file and leaves no temp files', () =>
   assert.deepEqual(fs.readdirSync(dir), ['x.txt']);
 });
 
-test('writeFileAtomic removes its temp file when the rename fails', () => {
+function ioError(code) {
+  return Object.assign(new Error(`${code}: simulated`), { code });
+}
+
+// Every rename failure a real folder can produce on Windows is a busy error, retried for 2 s,
+// so the failures below are simulated.
+test('writeFileAtomic removes its temp file when the rename fails', (t) => {
   const dir = tempDir();
-  const target = path.join(dir, 'taken');
-  fs.mkdirSync(target);
-  fs.writeFileSync(path.join(target, 'inside'), 'x'); // a non-empty folder cannot be replaced by a file
-  assert.throws(() => writeFileAtomic(target, 'data'), (err) => typeof err.code === 'string');
-  assert.deepEqual(fs.readdirSync(dir), ['taken']);
+  const file = path.join(dir, 'x.txt');
+  fs.writeFileSync(file, 'old');
+  t.mock.method(fs, 'renameSync', () => { throw ioError('EXDEV'); }); // never retried
+  assert.throws(() => writeFileAtomic(file, 'new'), { code: 'EXDEV' });
+  t.mock.restoreAll();
+  assert.deepEqual(fs.readdirSync(dir), ['x.txt']);
+  assert.equal(fs.readFileSync(file, 'utf8'), 'old');
+});
+
+test('writeFileAtomic retries a busy rename on Windows only', (t) => {
+  const dir = tempDir();
+  const file = path.join(dir, 'x.txt');
+  const rename = fs.renameSync;
+  let failures = 2;
+  t.mock.method(fs, 'renameSync', (from, to) => {
+    if (failures-- > 0) throw ioError('EPERM');
+    return rename(from, to);
+  });
+  if (process.platform === 'win32') {
+    writeFileAtomic(file, 'new');
+    assert.equal(fs.readFileSync(file, 'utf8'), 'new');
+  } else {
+    assert.throws(() => writeFileAtomic(file, 'new'), { code: 'EPERM' });
+  }
+  t.mock.restoreAll();
+  assert.deepEqual(fs.readdirSync(dir), process.platform === 'win32' ? ['x.txt'] : []);
 });
 
 test('readJson returns the fallback for missing or corrupt files', () => {
