@@ -4741,11 +4741,12 @@ Record anything unexpected as a task. Plan 3 runs the full acceptance script.
     - `lastActivity` is exported.
   - **ops:** redacted labels, strict types, normalized text, at most 50 dependencies, safe links, names in events.
 - **Must-dos for the remaining tasks** (from the reviews):
-  - **Task 13:** use `getAgent`/`Object.hasOwn` for every agent lookup (for example in `resolveRecipient`); messages carry `authorName`; `task.claimed` carries `agentName`; `task.completed` carries `completedByName`.
+  - **Task 13 (done):** the must-dos landed. Ownership rules were added after review (commit "fix(core): ops ownership …"): holder-only completion, explicit `takeOver`, human-only answers, and a live registered actor for every op. The repository code supersedes the Task 13 listing.
   - **Task 14:**
     - prefer the names stored in events (`authorName`, `assigneeName`, …) over `nameOf`;
     - `needsHuman` uses `lastActivity`;
-    - `whatsNew` pings messages addressed `to` the agent.
+    - `whatsNew` pings messages addressed `to` the agent;
+    - first, a small fix in ops: `completeTask` sends no closing-question note to the completer itself, so an agent is never pinged about its own action.
   - **Task 16:**
     - pass `host: currentHost(env)`;
     - run housekeeping through `transact`'s `before`;
@@ -4757,14 +4758,15 @@ Record anything unexpected as a task. Plan 3 runs the full acceptance script.
     - `relayedFromHuman` messages render as "relayed by <agent>";
     - touch only with the server's own pid and host;
     - never revive an ended agent;
+    - add a test for a session that ends and starts again in the same process (`/clear`): the server then acts as the new agent. When only an ended agent matches, it answers with the "not registered yet" error;
     - run housekeeping through `before`;
     - reload config on every call.
-  - **Store follow-up:** save the registry whenever `before` ran, even if `fn` does not return it.
-  - **Maintenance follow-up:**
+  - **Follow-ups (done):**
+    - `transact` saves the registry whenever `before` ran;
     - `folderMissing` returns false for relative paths;
     - `inheritClaim`'s `task.claimed` carries `agentName`;
-    - the release system messages carry `authorName` `system`.
-  - **Tests follow-up:** the test helpers must remove their temp folders; runs so far left thousands behind in the OS temp folder.
+    - system messages carry `authorName: 'system'`;
+    - test helpers remove their temp folders on exit (prefix `agentboard-test-`).
 - **Carried over to plan 3, before the first push:**
   - CI hardening:
     - verify the gitleaks download with a SHA-256 checksum;
