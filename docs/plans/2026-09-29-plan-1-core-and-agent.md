@@ -1760,7 +1760,7 @@ import { applyEvent, emptyState, SCHEMA } from './reduce.js';
  * }} Registry
  */
 
-/** @param {string} cwd @param {{ home?: string }} [opts] */
+/** @param {string} cwd @param {{ home?: string, projectDir?: string }} [opts] */
 export function openBoard(cwd, opts = {}) {
   const loc = resolveBoard(cwd, opts);
   const dir = loc.boardDir;
@@ -3572,13 +3572,12 @@ Expected: FAIL, module not found.
 `src/hooks/run.js`:
 ```js
 import fs from 'node:fs';
-import path from 'node:path';
 import { endAgent, touchAgent } from '../core/agents.js';
 import { rulesPath } from '../core/config.js';
 import { lockConflict, recordTouch } from '../core/locks.js';
 import { inheritClaim, maintenance } from '../core/maintenance.js';
 import { claimedBy, syncChecklist, touchTaskFile } from '../core/ops.js';
-import { currentBranch, toRepoPath } from '../core/paths.js';
+import { currentBranch, lockKey, toRepoPath } from '../core/paths.js';
 import { whatsNew } from '../core/queries.js';
 import { logError, openBoard, readRegistry, readState, transact } from '../core/store.js';
 import { formatBrief, formatPings } from './format.js';
@@ -3600,8 +3599,7 @@ function contextOutput(event, text) {
 function repoFile(board, input) {
   const file = input.tool_input?.file_path ?? input.tool_input?.notebook_path;
   if (typeof file !== 'string' || !file) return null;
-  const rel = toRepoPath(board.repoRoot, file);
-  return rel.startsWith('..') || path.isAbsolute(rel) ? null : rel;
+  return toRepoPath(board.repoRoot, file);
 }
 
 /** Moves the agent's cursor to now, remembering the previous one. Returns the previous cursor. */
@@ -3622,9 +3620,10 @@ export function runHook(input, opts = {}) {
   if (!input || typeof input.session_id !== 'string' || !input.session_id) return '';
   let board = null;
   try {
-    const cwd = input.cwd || process.cwd();
-    board = openBoard(cwd, { home: opts.home });
-    const h = { board, input, cwd, env: opts.env ?? process.env, now: opts.now ?? Date.now() };
+    const env = opts.env ?? process.env;
+    board = openBoard(input.cwd || process.cwd(), { home: opts.home, projectDir: env.CLAUDE_PROJECT_DIR });
+    // The agent's folder is the worktree root, never a subfolder it cd'ed into (§6).
+    const h = { board, input, cwd: board.repoRoot, env, now: opts.now ?? Date.now() };
     switch (input.hook_event_name) {
       case 'SessionStart': return sessionStart(h);
       case 'UserPromptSubmit': return promptSubmit(h);
@@ -3676,7 +3675,7 @@ function preToolUse({ board, input, now }) {
   const state = readState(board);
   const mine = claimedBy(state, input.session_id);
   const hit = lockConflict({
-    reg: readRegistry(board), cfg: board.config, now, agentId: input.session_id, taskId: mine?.id ?? null, file,
+    reg: readRegistry(board), cfg: board.config, now, agentId: input.session_id, taskId: mine?.id ?? null, file: lockKey(file),
   });
   if (!hit) return '';
   const other = hit.task != null ? state.tasks[hit.task] : null;
@@ -3702,7 +3701,7 @@ function postToolUse({ board, input, cwd, env, now }) {
     } else {
       const file = repoFile(board, input);
       if (file) {
-        recordTouch(reg, { agentId: input.session_id, taskId: claimedBy(state, input.session_id)?.id ?? null, file, now });
+        recordTouch(reg, { agentId: input.session_id, taskId: claimedBy(state, input.session_id)?.id ?? null, file: lockKey(file), now });
         events.push(...touchTaskFile(ctx, file).events);
       }
     }
@@ -4210,10 +4209,9 @@ export function buildTools(board, who) {
 
 /** Entry point for `agentboard mcp`. */
 export function startMcpServer({ env = process.env, cwd = process.cwd() } = {}) {
-  const folder = env.CLAUDE_PROJECT_DIR || cwd;
-  const board = openBoard(folder);
+  const board = openBoard(env.CLAUDE_PROJECT_DIR || cwd, { projectDir: env.CLAUDE_PROJECT_DIR });
   const pid = Number(env.CLAUDE_PID) > 0 ? Number(env.CLAUDE_PID) : null;
-  const tools = buildTools(board, { sessionId: env.CLAUDE_CODE_SESSION_ID, pid, folder });
+  const tools = buildTools(board, { sessionId: env.CLAUDE_CODE_SESSION_ID, pid, folder: board.repoRoot });
   const handle = createHandler({ name: NAME, version: VERSION, instructions: INSTRUCTIONS, tools });
   serveStdio(handle, { onError: (err) => logError(board, 'mcp', err) });
 }
@@ -4635,6 +4633,15 @@ Record anything unexpected as a task. Plan 3 runs the full acceptance script.
   - `tempRepo` is isolated from personal git config.
 
   The repository code supersedes the Task 3 listing. From Task 9 on, `transact` accepts `timeoutMs`, and hooks use 2 s.
+- **Task 4 was hardened after review** (commits "fix(core): robust board location …" and "fix(core): non-git board search stops at the project folder"). The changes:
+  - `resolveBoard(cwd, { home, projectDir, env })` validates git dirs, resolves relative `gitdir:` through real paths, applies an ownership/home-folder guard and honours `GIT_CEILING_DIRECTORIES`;
+  - project names are derived from the common git dir;
+  - outside git, it searches for an existing board up to the project folder;
+  - `toRepoPath` returns null outside the root;
+  - a new `lockKey()` case-folds lock keys on Windows and macOS;
+  - `currentBranch` returns null for reftable repositories.
+
+  The repository code supersedes the Task 4 listing. Hooks and the MCP server pass `projectDir: CLAUDE_PROJECT_DIR` and use `board.repoRoot` as the agent's folder.
 - **Carried over to plan 3, before the first push:**
   - CI hardening:
     - verify the gitleaks download with a SHA-256 checksum;
