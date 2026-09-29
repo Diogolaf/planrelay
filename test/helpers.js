@@ -8,9 +8,25 @@ export const HOUR = 60 * MIN;
 /** A fixed "now" for deterministic tests. */
 export const T0 = Date.UTC(2026, 0, 1, 12, 0, 0);
 
-/** A fresh empty folder (real long path, no 8.3 short names on Windows). */
+const created = [];
+
+/** Removes every folder tempDir made; runs once when the test process exits and never throws. */
+function cleanup() {
+  for (const dir of created.splice(0)) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3 });
+    } catch {
+      // a folder that cannot be removed now is left for the OS temp cleanup
+    }
+  }
+}
+process.on('exit', cleanup);
+
+/** A fresh empty folder (real long path, no 8.3 short names on Windows), removed when the process exits. */
 export function tempDir() {
-  return fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'ab-')));
+  const dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'agentboard-test-')));
+  created.push(dir);
+  return dir;
 }
 
 let emptyGitConfig;

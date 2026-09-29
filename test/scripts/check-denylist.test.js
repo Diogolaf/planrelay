@@ -3,28 +3,22 @@
 // Children never see the maintainer's setup: HOME/USERPROFILE point at the temp folder,
 // inherited GIT_* and AGENTBOARD_* variables are dropped, and git ignores system and
 // global config. So a test can never read the private list or touch this repository.
-import { test, after } from 'node:test';
+import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { tempDir } from '../helpers.js';
 
 const REPO_ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const SCRIPT = path.join(REPO_ROOT, 'scripts', 'check-denylist.mjs');
 const TERMS = ['zorbacorp', 'quux-project', 'Élodie']; // entries #1, #2, #3
 const LIST = `# invented test terms\n${TERMS.join('\n')}\n`;
 
-const created = [];
-after(() => {
-  for (const dir of created) fs.rmSync(dir, { recursive: true, force: true });
-});
-
 /** A fresh repository with a placeholder identity, plus helpers bound to it. */
 function tempRepo() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentboard-guard-'));
-  created.push(dir);
+  const dir = tempDir();
   const home = path.join(dir, 'home');
   const repo = path.join(dir, 'repo');
   fs.mkdirSync(home);
