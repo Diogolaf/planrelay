@@ -440,6 +440,21 @@ test('the stalled countdown ends exactly when housekeeping releases the claim', 
   assert.equal(released(s.releaseAt + 1), true);
 });
 
+test('stalled lists every claim housekeeping releases for inactivity, including an idle holder that never ended', () => {
+  const ctx = ctxWith({ tasks: [{ id: 9, title: 'Cache photos', assignee: 'a2', claim: { folder: '/w/b', since: T0 } }] });
+  // Jade's terminal was killed: no SessionEnd, so her session never ended; she is only idle
+  const io = { host: 'test-host', missing: () => false, alive: () => true };
+  const due = T0 + 24 * HOUR;
+  for (const now of [due - 1, due, due + 1, due + HOUR]) {
+    const { stalled } = needsHuman(ctx.state, ctx.reg, DEFAULTS, now);
+    const released = maintenance(ctx.state, structuredClone(ctx.reg), DEFAULTS, now, io).some((e) => e.type === 'task.released');
+    assert.equal(stalled.length === 1, released, `${now - due} ms after the release time`);
+    // releaseAt at or before now: due at the next write
+    if (released) assert.deepEqual(stalled, [{ id: 9, title: 'Cache photos', since: T0, releaseAt: due }]);
+  }
+  assert.equal(ctx.reg.agents.a2.endedAt, null);
+});
+
 test('queries never change the board, and their results share nothing with it', () => {
   const ctx = sample();
   apply(ctx, postMessage({ ...ctx, agentId: 'a2' }, { taskId: 1, kind: 'question', to: 'human', text: 'Include vegan? See #3.' }));

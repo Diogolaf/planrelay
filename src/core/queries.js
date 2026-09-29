@@ -1,6 +1,6 @@
 import { getAgent, nameOf, statusOf } from './agents.js';
 import { blockers, byRank, childrenIndex, columnOf, COLUMNS, epicPath, epicProgress, inEpic } from './derive.js';
-import { lastActivity } from './maintenance.js';
+import { claimReleaseAt, claimTimedOut, lastActivity } from './maintenance.js';
 import { BoardError, claimedBy, fieldsOf, got, taskNumber } from './ops.js';
 import { displayName, MESSAGE_RING, newTask } from './reduce.js';
 
@@ -273,9 +273,11 @@ export function whatsNew(state, reg, agentId, options = {}) {
 
 /**
  * What the dashboard's "Needs you" shows (§13), in rank order: open questions to the human,
- * agents' suggestions awaiting approval, and claims whose holder is gone, with the time of the
- * automatic release. The countdown uses lastActivity, the rule housekeeping releases by, so it
- * ends when the claim is released.
+ * agents' suggestions awaiting approval, and stalled claims with the time of their automatic
+ * release. A claim is stalled when its holder is gone, or when housekeeping would release it for
+ * inactivity: the same rule (maintenance.claimTimedOut), so a holder that is only idle past
+ * claimTimeoutHours, such as a killed terminal that never ended its session, is listed too. Its
+ * releaseAt is then at or before now: due at the next write.
  * @param {BoardState} state
  * @param {Registry} reg
  * @param {import('./config.js').Config} cfg
@@ -300,9 +302,8 @@ export function needsHuman(state, reg, cfg, now) {
     if (t.kind === 'task' && !t.approved && t.origin === 'agent') {
       approvals.push({ id: t.id, title: t.title, suggestedBy: writtenBy(reg, t.createdBy, t.createdByName) });
     }
-    if (t.assignee && statusOf(getAgent(reg, t.assignee), now, cfg) === 'gone') {
-      const last = lastActivity(t, reg);
-      stalled.push({ id: t.id, title: t.title, since: last, releaseAt: last + cfg.claimTimeoutHours * 3_600_000 });
+    if (t.assignee && (statusOf(getAgent(reg, t.assignee), now, cfg) === 'gone' || claimTimedOut(t, reg, cfg, now))) {
+      stalled.push({ id: t.id, title: t.title, since: lastActivity(t, reg), releaseAt: claimReleaseAt(t, reg, cfg) });
     }
   }
   return { questions, approvals, stalled };

@@ -75,6 +75,26 @@ export function lastActivity(task, reg) {
   return [task.updatedAt, task.createdAt].find(Number.isFinite) ?? 0;
 }
 
+/**
+ * When a claim is due for release after claimTimeoutHours without activity (§10): its lastActivity
+ * plus the timeout. The dashboard counts down to it (queries.needsHuman).
+ * @param {import('./reduce.js').Task} task @param {import('./store.js').Registry} reg
+ * @param {import('./config.js').Config} cfg @returns {number}
+ */
+export function claimReleaseAt(task, reg, cfg) {
+  return lastActivity(task, reg) + cfg.claimTimeoutHours * 3_600_000;
+}
+
+/**
+ * True when housekeeping releases the claim for inactivity at `now`: once now is past
+ * claimReleaseAt. The one rule for both housekeeping and the dashboard's stalled list.
+ * @param {import('./reduce.js').Task} task @param {import('./store.js').Registry} reg
+ * @param {import('./config.js').Config} cfg @param {number} now @returns {boolean}
+ */
+export function claimTimedOut(task, reg, cfg, now) {
+  return now > claimReleaseAt(task, reg, cfg);
+}
+
 /** The agent's last activity for the inactivity rule: lastSeen, else firstSeen, else never. */
 const seenAt = (a) => [a.lastSeen, a.firstSeen].find(Number.isFinite) ?? -Infinity;
 
@@ -121,7 +141,7 @@ export function maintenance(state, reg, cfg, now, io = {}) {
     if (!t.assignee || t.done) continue;
     const key = String(t.id);
     let reason = null;
-    if (now - lastActivity(t, reg) > timeoutMs) reason = 'timeout';
+    if (claimTimedOut(t, reg, cfg, now)) reason = 'timeout';
     else if (sweep) {
       const owner = getAgent(reg, t.assignee);
       const folder = t.claim?.folder;
