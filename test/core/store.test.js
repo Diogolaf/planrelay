@@ -512,3 +512,14 @@ test('concurrent processes create unique ids without losing events', async () =>
   assert.equal(s.seq, 100);
   assert.equal(s.nextId, 101);
 });
+
+test('housekeeping (before) registry changes are saved even when fn returns no registry', () => {
+  const b = openBoard(tempRepo());
+  transact(b, () => ({ events: [createEv(1)] }), {
+    before: (s, reg) => { reg.sweptAt = T0; reg.touches['src/a.js'] = { agent: 'a1', task: 1, at: T0 }; },
+  });
+  const reg = readRegistry(b);
+  assert.equal(reg.sweptAt, T0);
+  assert.equal(reg.touches['src/a.js'].agent, 'a1');
+  assert.equal(JSON.parse(fs.readFileSync(b.files.agents, 'utf8')).sweptAt, T0);
+});

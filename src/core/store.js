@@ -402,7 +402,8 @@ function synchronous(ret, who) {
  * Runs `before` (housekeeping) and then fn on the state and a fresh registry, and checks, stamps and
  * applies what they return, all as one batch: before's events come first and are applied before fn
  * runs, so fn sees their effects. Writes nothing; a throw here commits nothing.
- * @returns {{ out: any, events: BoardEvent[], accepted: any[] }} accepted: the messages the reducer took
+ * @returns {{ out: any, events: BoardEvent[], accepted: any[], registry: Registry | null }} accepted: the
+ * messages the reducer took; registry: what to save (fn's, else the one before changed), or null
  */
 function prepare(board, state, fn, before, now) {
   const registry = readRegistry(board);
@@ -433,7 +434,7 @@ function prepare(board, state, fn, before, now) {
   }
   add(out.events ?? [], 'fn');
   for (const ev of events) ev.n = events.length;
-  return { out, events, accepted };
+  return { out, events, accepted, registry: out.registry ?? (before ? registry : null) };
 }
 
 /** The current snapshot, or a lenient rebuild when it is missing, corrupt or behind the log. */
@@ -474,7 +475,8 @@ function appendMessage(board, m) {
  * same lock, and returns an array of events (it may also change the registry). They are stamped
  * and applied before fn runs, so fn sees their effects, and they are written in the same batch,
  * ahead of fn's events; if fn throws, none of them is written. It runs again with fn on a fence
- * re-run. Like fn's own changes, its registry changes are saved only when fn returns the registry.
+ * re-run. Its registry changes are saved even when fn returns no registry (a registry
+ * fn returns is saved instead, and it already holds before's changes).
  *
  * Order of a write (§6): agent registry, event append (the commit point: the whole batch or
  * nothing), message files, snapshot. A failure before the append throws and commits nothing (a
@@ -499,7 +501,7 @@ export function transact(board, fn, opts = {}) {
     const file = board.files.events;
     ensureNewlineAtEnd(file);
     let { state, degraded } = openState(board);
-    let { out, events, accepted } = prepare(board, state, fn, before, now);
+    let { out, events, accepted, registry } = prepare(board, state, fn, before, now);
     // Fence: never append on top of events this state has not seen. The log can grow under the lock
     // only when the lock was taken over as stale while still held; then rebuild and run before and
     // fn again. (prepare applied the events to `state` already; that leaves eventsSize alone.)
@@ -511,9 +513,9 @@ export function transact(board, fn, opts = {}) {
       logError(board, 'fence', new Error(`the event log changed under the lock (${state.eventsSize} bytes seen, ${found} found); rebuilding`));
       ensureNewlineAtEnd(file);
       ({ state, degraded } = rebuild(board, false));
-      ({ out, events, accepted } = prepare(board, state, fn, before, now));
+      ({ out, events, accepted, registry } = prepare(board, state, fn, before, now));
     }
-    if (out.registry != null) writeJsonAtomic(board.files.agents, out.registry, { pretty: false });
+    if (registry != null) writeJsonAtomic(board.files.agents, registry, { pretty: false });
     if (events.length) {
       const sizeBefore = state.eventsSize;
       if (fileSize(file) !== sizeBefore) {
