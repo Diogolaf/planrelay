@@ -7,9 +7,10 @@ import {
   openBoard, transact, readState, readMessages, readRegistry, repair, replay, messagesFile,
 } from '../../src/core/store.js';
 import { samePath } from '../../src/core/paths.js';
-import { touchAgent } from '../../src/core/agents.js';
+import { PALETTE, touchAgent } from '../../src/core/agents.js';
 import { DEFAULTS } from '../../src/core/config.js';
 import { maintenance } from '../../src/core/maintenance.js';
+import { claimTask } from '../../src/core/ops.js';
 import { whatsNew } from '../../src/core/queries.js';
 import { SCHEMA } from '../../src/core/reduce.js';
 import { tempRepo, T0, MIN, HOUR } from '../helpers.js';
@@ -476,12 +477,12 @@ test('malformed registry entries are dropped, so one bad entry cannot make every
   fs.mkdirSync(b.dir, { recursive: true });
   const touch = { agent: 'a1', task: 1, at: T0 };
   fs.writeFileSync(b.files.agents, JSON.stringify({
-    agents: { a1: { id: 'a1' }, '': { id: '' }, a2: null, a3: 'x', a4: [1] },
+    agents: { a1: { id: 'a1', name: 'Amber', color: '#A45F00' }, '': { id: '' }, a2: null, a3: 'x', a4: [1] },
     activity: { 1: T0, 2: 'soon', 3: null, 4: {} },
     touches: { 'src/a.js': touch, 'src/b.js': null, 'src/c.js': 5, 'src/d.js': ['a1'] },
     version: 3, // other top-level keys are kept
   }));
-  const clean = { agents: { a1: { id: 'a1' } }, activity: { 1: T0 }, touches: { 'src/a.js': touch }, version: 3 };
+  const clean = { agents: { a1: { id: 'a1', name: 'Amber', color: '#A45F00' } }, activity: { 1: T0 }, touches: { 'src/a.js': touch }, version: 3 };
   assert.deepEqual(readRegistry(b), clean);
   // A write that walks every agent works, and saves the cleaned registry.
   const out = transact(b, (s, reg) => ({ result: Object.values(reg.agents).map((a) => a.id), registry: reg }));
@@ -499,15 +500,19 @@ test('agent cursors are board sequence numbers: an unusable cursor or prevCursor
   fs.mkdirSync(b.dir, { recursive: true });
   fs.writeFileSync(b.files.agents, JSON.stringify({
     agents: {
-      a1: { id: 'a1', name: 'Amber', cursor: 12, prevCursor: 0 },
-      a2: { id: 'a2', name: 'Jade', cursor: -1, prevCursor: 2.5 },
-      a3: { id: 'a3', cursor: '12', prevCursor: null },
-      a4: { id: 'a4', cursor: 1e300, prevCursor: { seq: 3 } },
-      a5: { id: 'a5' },
+      a1: { id: 'a1', name: 'Amber', color: '#A45F00', cursor: 12, prevCursor: 0 },
+      a2: { id: 'a2', name: 'Jade', color: '#17735A', cursor: -1, prevCursor: 2.5 },
+      a3: { id: 'a3', name: 'Cobalt', color: '#2F4DB5', cursor: '12', prevCursor: null },
+      a4: { id: 'a4', name: 'Plum', color: '#7A3E8E', cursor: 1e300, prevCursor: { seq: 3 } },
+      a5: { id: 'a5', name: 'Rust', color: '#A3401F' },
     },
   }));
   const clean = {
-    a1: { id: 'a1', name: 'Amber', cursor: 12, prevCursor: 0 }, a2: { id: 'a2', name: 'Jade' }, a3: { id: 'a3' }, a4: { id: 'a4' }, a5: { id: 'a5' },
+    a1: { id: 'a1', name: 'Amber', color: '#A45F00', cursor: 12, prevCursor: 0 },
+    a2: { id: 'a2', name: 'Jade', color: '#17735A' },
+    a3: { id: 'a3', name: 'Cobalt', color: '#2F4DB5' },
+    a4: { id: 'a4', name: 'Plum', color: '#7A3E8E' },
+    a5: { id: 'a5', name: 'Rust', color: '#A3401F' },
   };
   assert.deepEqual(readRegistry(b).agents, clean);
   transact(b, (s, reg) => ({ registry: reg }));
@@ -517,6 +522,65 @@ test('agent cursors are board sequence numbers: an unusable cursor or prevCursor
   const a1 = readRegistry(b).agents.a1;
   assert.equal(Object.getPrototypeOf(a1), Object.prototype);
   assert.deepEqual([Object.hasOwn(a1, 'cursor'), a1.cursor], [false, undefined]);
+});
+
+test('the registry reader gives every agent a usable, unique name and a #rrggbb color, the same on every read', () => {
+  const b = openBoard(tempRepo());
+  fs.mkdirSync(b.dir, { recursive: true });
+  fs.writeFileSync(b.files.agents, JSON.stringify({
+    agents: {
+      a1: { id: 'a1', name: 'Amber', color: '#A45F00' },
+      a2: { id: 'a2', name: { first: 'Jade' }, color: '#17735A' },
+      a3: { id: 'a3', name: '', color: 'red' },
+      a4: { id: 'a4', name: '  Cobalt ', color: 42 },
+      a5: { id: 'a5', name: 'J'.repeat(61) },
+      a6: { id: 'a6', name: 'Rosemary', color: '#12345' },
+      a7: { id: 'a7', name: 'Plum 2', color: '#abcdef' },
+      a8: { id: 'a8' },
+      a9: { id: 'a9', name: 'Jade 3', color: 'teal' },
+    },
+  }));
+  const reg = readRegistry(b);
+  const named = Object.values(reg.agents).map((a) => [a.id, a.name, a.color]);
+  assert.deepEqual(named, [
+    ['a1', 'Amber', '#A45F00'],
+    ['a2', 'Jade', '#17735A'], // the first palette name no entry holds, with its color
+    ['a3', 'Plum', '#7A3E8E'], // "Plum 2" is held, "Plum" is not
+    ['a4', 'Cobalt', '#2F4DB5'], // a usable name is kept, trimmed; the color follows the palette name
+    ['a5', 'Rust', '#A3401F'],
+    ['a6', 'Rosemary', named[5][2]], // not a palette name: a palette color picked from the name
+    ['a7', 'Plum 2', '#abcdef'], // any valid #rrggbb stays
+    ['a8', 'Moss', '#4F6B1F'],
+    ['a9', 'Jade 3', '#17735A'], // a numbered name gets its palette name's color
+  ]);
+  assert.ok(PALETTE.some(([, color]) => color === named[5][2]));
+  assert.equal(new Set(named.map(([, name]) => name)).size, named.length);
+  assert.deepEqual(readRegistry(b), reg); // determined by the file alone
+  transact(b, (s, r) => ({ registry: r }));
+  assert.deepEqual(readRegistry(b), reg); // and stable once saved
+  // with every palette name held, repaired names are numbered
+  const full = Object.fromEntries(PALETTE.map(([name, color], i) => [`p${i}`, { id: `p${i}`, name, color }]));
+  fs.writeFileSync(b.files.agents, JSON.stringify({ agents: { ...full, x1: { id: 'x1', name: null }, x2: { id: 'x2', name: 5 } } }));
+  const more = readRegistry(b).agents;
+  assert.deepEqual([more.x1.name, more.x1.color, more.x2.name, more.x2.color], ['Amber 2', '#A45F00', 'Jade 2', '#17735A']);
+});
+
+test('after the reader repairs a name, ops write a proper name into system notes and events', () => {
+  const b = openBoard(tempRepo());
+  transact(b, () => ({
+    events: [createEv(1), { type: 'task.claimed', actor: 'a2', data: { id: 1, agent: 'a2', agentName: 'Jade', folder: '/w/b' } }],
+  }));
+  fs.writeFileSync(b.files.agents, JSON.stringify({
+    agents: {
+      a1: { id: 'a1', name: { first: 'Amber' }, color: 7, folder: '/w/a', endedAt: null, lastSeen: T0, cursor: 2 },
+      a2: { id: 'a2', name: 'Jade', color: '#17735A', folder: '/w/b', endedAt: T0, lastSeen: T0 },
+    },
+  }));
+  const ctx = { state: readState(b), reg: readRegistry(b), cfg: DEFAULTS, agentId: 'a1', now: T0 + MIN };
+  assert.equal(ctx.reg.agents.a1.name, 'Amber');
+  const out = claimTask(ctx, { id: 1, takeOver: true });
+  assert.equal(out.events[0].data.message.text, 'Amber took over from Jade, whose session had ended (folder /w/b).');
+  assert.equal(out.events[1].data.agentName, 'Amber');
 });
 
 test('housekeeping (before) runs first: fn sees its effects, and both are written as one batch', () => {

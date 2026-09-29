@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { NAME } from '../name.js';
+import { repairIdentities } from './agents.js';
 import { readConfig } from './config.js';
 import {
   appendLine, fileSize, isBusyError, readJson, readLines, retryWhileBusy, writeFileAtomic, writeJsonAtomic,
@@ -89,8 +90,9 @@ const REGISTRY_CLEAN = { agents: cleanAgent };
  * The saved registry. A missing, corrupt or misshapen part reads as empty, and malformed entries
  * are dropped (an agent or touch that is not an object, an activity time that is not a number, an
  * agent with an empty id), so one bad entry can never make every write throw. An agent's cursor or
- * prevCursor that is not a sequence number is dropped, and the agent kept. Other top-level keys
- * are kept. @param {Board} board @returns {Registry}
+ * prevCursor that is not a sequence number is dropped, and the agent kept. Every agent gets a
+ * usable, unique name and a #rrggbb color (agents.repairIdentities), so no name that is not text
+ * ever reaches a message or an event. Other top-level keys are kept. @param {Board} board @returns {Registry}
  */
 export function readRegistry(board) {
   const r = readJson(board.files.agents, null);
@@ -101,6 +103,7 @@ export function readRegistry(board) {
     const clean = REGISTRY_CLEAN[part] ?? ((v) => v);
     reg[part] = isObj(r[part]) ? Object.fromEntries(Object.entries(r[part]).filter(([k, v]) => keep(k, v)).map(([k, v]) => [k, clean(v)])) : {};
   }
+  repairIdentities(reg.agents);
   return /** @type {Registry} */ (reg);
 }
 

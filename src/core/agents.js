@@ -90,8 +90,8 @@ function pickName(reg, folder, now, selfId) {
     if (prev && !liveNames.has(prev.name)) return [prev.name, prev.color];
   }
   const held = new Set(others.map((a) => a.name));
-  const fresh = PALETTE.find(([name]) => !held.has(name));
-  if (fresh) return [fresh[0], fresh[1]];
+  const fresh = paletteName(held);
+  if (fresh) return fresh;
   /** @type {[string, string] | null} */
   let oldest = null;
   let oldestEnd = Infinity;
@@ -102,9 +102,62 @@ function pickName(reg, folder, now, selfId) {
     if (ended < oldestEnd) [oldest, oldestEnd] = [[name, color], ended];
   }
   if (oldest) return oldest;
+  return numberedName(held);
+}
+
+/** The first palette name `held` lacks, with its color; undefined when it holds them all. @returns {[string, string] | undefined} */
+function paletteName(held) {
+  const free = PALETTE.find(([name]) => !held.has(name));
+  return free ? [free[0], free[1]] : undefined;
+}
+
+/** The first numbered name `held` lacks ("Amber 2", "Jade 2" … "Slate 2", "Amber 3" …), with its palette color. @returns {[string, string]} */
+function numberedName(held) {
   for (let n = 2; ; n++) {
     const free = PALETTE.find(([name]) => !held.has(`${name} ${n}`));
     if (free) return [`${free[0]} ${n}`, free[1]];
+  }
+}
+
+/** A color the dashboard can use: "#" and six hex digits. */
+const COLOR = /^#[0-9a-f]{6}$/i;
+
+/**
+ * The palette color for a name: that of its palette name ("Amber" and "Amber 2" get Amber's), else
+ * one picked from the name's characters, so the same name always gets the same color.
+ * @param {string} name @returns {string}
+ */
+function colorFor(name) {
+  const base = PALETTE.find(([n]) => name === n || name.startsWith(`${n} `));
+  if (base) return base[1];
+  let sum = 0;
+  for (const c of name) sum = (sum + /** @type {number} */ (c.codePointAt(0))) % PALETTE.length;
+  return PALETTE[sum][1];
+}
+
+/**
+ * Repairs the agents of a registry read from disk (store.readRegistry), so every one has a name that
+ * displayName accepts and a #rrggbb color. The result depends on the agents alone (their key order,
+ * never the clock or the file system):
+ * - a usable name is kept, trimmed;
+ * - an unusable one (not text, empty, too long) is replaced, in key order, by the first name no
+ *   other agent holds, as touchAgent names a new agent that has no folder continuity: a palette
+ *   name, then a numbered one, with its color. Repaired names are unique in the registry;
+ * - a color that is not #rrggbb becomes the palette color of the name (colorFor).
+ * Mutates the agents. @param {Record<string, any>} agents
+ */
+export function repairIdentities(agents) {
+  const list = Object.values(agents);
+  const held = new Set(list.map((a) => displayName(a.name)).filter((name) => name !== undefined));
+  for (const a of list) {
+    const name = displayName(a.name);
+    if (name === undefined) {
+      [a.name, a.color] = paletteName(held) ?? numberedName(held);
+      held.add(a.name);
+      continue;
+    }
+    a.name = name;
+    if (!(typeof a.color === 'string' && COLOR.test(a.color))) a.color = colorFor(name);
   }
 }
 
