@@ -326,6 +326,77 @@ test('a failed append rolls the registry back to its exact previous content, so 
   assert.equal(fs.existsSync(fresh.files.agents), false);
 });
 
+/**
+ * Makes appends to the board's event log write `part` of the data (all, half or none) and then
+ * throw, as an EIO reported at close would; truncating the log back fails too when `stuck` is true.
+ */
+function brokenAppends(t, b, { part, stuck }) {
+  const original = fs.appendFileSync;
+  t.mock.method(fs, 'appendFileSync', (file, data, ...rest) => {
+    if (file !== b.files.events) return original.call(fs, file, data, ...rest);
+    const text = String(data);
+    const written = part === 'all' ? text : part === 'half' ? text.slice(0, Math.floor(text.length / 2)) : '';
+    if (written) original.call(fs, file, written);
+    throw Object.assign(new Error('EIO after write (test)'), { code: 'EIO' });
+  });
+  if (stuck) {
+    const originalTruncate = fs.truncateSync;
+    t.mock.method(fs, 'truncateSync', (file, ...rest) => {
+      if (file === b.files.events) throw Object.assign(new Error('truncate failed (test)'), { code: 'EIO' });
+      return originalTruncate.call(fs, file, ...rest);
+    });
+  }
+}
+
+test('the registry is restored only when the batch cannot have landed', (t) => {
+  /** A board where #1 exists; then a session registers and claims it in one write that fails as given. */
+  const attempt = (how) => {
+    const b = openBoard(tempRepo());
+    transact(b, (s, reg) => ({ events: [createEv(1)], registry: reg }), { now: T0 });
+    const registryBefore = fs.readFileSync(b.files.agents);
+    brokenAppends(t, b, how);
+    assert.throws(() => transact(b, (s, reg) => {
+      touchAgent(reg, { id: 'a9', folder: '/w/z', seq: s.seq }, T0);
+      return { events: [{ type: 'task.claimed', actor: 'a9', data: { id: 1, agent: 'a9', agentName: 'Jade', folder: '/w/z' } }], registry: reg };
+    }, { now: T0 }), /EIO after write \(test\)/);
+    t.mock.restoreAll();
+    return { restored: fs.readFileSync(b.files.agents).equals(registryBefore), known: Object.hasOwn(readRegistry(b).agents, 'a9'), holder: readState(b).tasks[1].assignee };
+  };
+  // the whole batch is in the log and stays there: it is committed, so the registry that goes with it is kept
+  assert.deepEqual(attempt({ part: 'all', stuck: true }), { restored: false, known: true, holder: 'a9' });
+  // the batch was written but truncated back, or never written: nothing landed, so the registry goes back
+  assert.deepEqual(attempt({ part: 'all', stuck: false }), { restored: true, known: false, holder: null });
+  assert.deepEqual(attempt({ part: 'none', stuck: true }), { restored: true, known: false, holder: null });
+  // half the batch stays in the log: replay ignores a torn batch, so it cannot have landed either
+  assert.deepEqual(attempt({ part: 'half', stuck: true }), { restored: true, known: false, holder: null });
+});
+
+test('when the log changed under the lock, the registry is restored and nothing is appended', (t) => {
+  const b = openBoard(tempRepo());
+  transact(b, (s, reg) => ({ events: [createEv(1)], registry: reg }), { now: T0 });
+  const registryBefore = fs.readFileSync(b.files.agents);
+  const sizeBefore = fs.statSync(b.files.events).size;
+  // the line another writer slips in is exactly as long as this write's batch, so the log's size alone
+  // would look as if the batch had landed: only "the append was never tried" tells them apart
+  const batchBytes = Buffer.byteLength(JSON.stringify({ seq: 2, tx: 2, n: 1, at: T0, ...createEv(2) }) + '\n');
+  const foreign = `${'x'.repeat(batchBytes - 1)}\n`;
+  const originalWrite = fs.writeFileSync;
+  let registryWrites = 0;
+  t.mock.method(fs, 'writeFileSync', (file, ...rest) => {
+    const out = originalWrite.call(fs, file, ...rest);
+    if (String(file).startsWith(b.files.agents) && ++registryWrites === 1) fs.appendFileSync(b.files.events, foreign);
+    return out;
+  });
+  assert.throws(() => transact(b, (s, reg) => {
+    reg.agents.z = { id: 'z' };
+    return { events: [createEv(2)], registry: reg };
+  }, { now: T0 }), /the event log changed while this process held the lock/);
+  t.mock.restoreAll();
+  assert.equal(fs.statSync(b.files.events).size, sizeBefore + batchBytes);
+  assert.deepEqual(fs.readFileSync(b.files.agents), registryBefore);
+  assert.deepEqual(Object.keys(readState(b).tasks), ['1']);
+});
+
 test('if the registry cannot be restored, that is logged and the append error is still the one thrown', (t) => {
   const b = openBoard(tempRepo());
   transact(b, (s, reg) => ({ events: [createEv(1)], registry: reg }));

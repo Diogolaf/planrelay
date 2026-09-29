@@ -488,6 +488,19 @@ function readRaw(file) {
   }
 }
 
+/**
+ * After an append that threw: does the log hold the whole batch, ending at `fullSize`? Also true when
+ * the size cannot be read, since the batch may then have landed and the registry that goes with it
+ * is kept. Never throws.
+ */
+function batchInLog(file, fullSize) {
+  try {
+    return fileSize(file) === fullSize;
+  } catch {
+    return true;
+  }
+}
+
 /** Puts a file back as readRaw found it: the same bytes, or no file. Never throws; a failure is logged. */
 function restoreRaw(board, file, saved, context) {
   try {
@@ -517,10 +530,13 @@ function appendMessage(board, m) {
  * fn returns is saved instead, and it already holds before's changes).
  *
  * Order of a write (§6): agent registry, event append (the commit point: the whole batch or
- * nothing), message files, snapshot. A failure before the append throws and commits nothing: the
- * registry, already written, is put back to its exact previous bytes under the same lock (best
- * effort: a failed restore is logged, and the original error is still the one thrown), so no
- * registry change, such as an agent cursor, is ever ahead of the log after an ordinary failure.
+ * nothing), message files, snapshot. A failure at the append throws. When the batch cannot have
+ * landed (the log changed under the lock, or it does not hold the whole batch), the registry,
+ * already written, is put back to its exact previous bytes under the same lock (best effort: a
+ * failed restore is logged, and the original error is still the one thrown). When the whole batch
+ * is in the log although the append threw (an error at close, and the truncate back failed too),
+ * the write is committed and the registry that goes with it is kept. Either way the registry is
+ * never ahead of the log, nor behind it, after an ordinary failure.
  * One case remains: a process crash between the two writes leaves the registry ahead. A cursor
  * advanced there skips the seqs the log did not reach, which the next write reuses (housekeeping
  * regenerates the same events), so that agent loses one batch of pings; while the log is still
@@ -564,14 +580,20 @@ export function transact(board, fn, opts = {}) {
     if (events.length) {
       const sizeBefore = state.eventsSize;
       const payload = events.map((e) => JSON.stringify(e)).join('\n') + '\n';
+      let appending = false;
       try {
         if (fileSize(file) !== sizeBefore) {
           throw new Error(`${NAME}: the event log changed while this process held the lock (${file}); nothing was appended`);
         }
+        appending = true;
         appendEvents(board, payload, sizeBefore); // the commit point
       } catch (err) {
-        // nothing was committed: the registry goes back too, so no cursor is ever ahead of the log
-        if (previousRegistry) restoreRaw(board, board.files.agents, previousRegistry, 'restoring the registry after a failed append');
+        // The registry goes back only when the batch cannot have landed, so it is never ahead of the log
+        // nor behind it: the append was never tried (the log changed under the lock), or the log does not
+        // hold the whole batch (nothing written, truncated back, or a torn batch, which replay ignores).
+        if (previousRegistry && (!appending || !batchInLog(file, sizeBefore + Buffer.byteLength(payload)))) {
+          restoreRaw(board, board.files.agents, previousRegistry, 'restoring the registry after a failed append');
+        }
         throw err;
       }
       state.eventsSize = sizeBefore + Buffer.byteLength(payload);
