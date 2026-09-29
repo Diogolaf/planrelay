@@ -302,7 +302,7 @@ test('questions are refused on done tasks; comments are not', () => {
   assert.equal(postMessage(ctx, { taskId: 5, text: 'Follow-up in #6.' }).result.kind, 'comment');
 });
 
-test('completion closes open questions with a note to each asker, and leaves Backlog dependents waiting for approval', () => {
+test('completion closes open questions with a note to each other asker, and leaves Backlog dependents waiting for approval', () => {
   const q = (id, author) => ({ id, to: 'human', author, at: 0, text: 'Which oven?' });
   const ctx = ctxWith({
     tasks: [
@@ -314,7 +314,7 @@ test('completion closes open questions with a note to each asker, and leaves Bac
   const out = apply(ctx, completeTask(ctx, { id: 1, summary: 'Shipped.' }));
   const notes = out.events.filter((e) => e.data.message?.kind === 'system').map((e) => e.data.message);
   assert.deepEqual(notes.map((m) => [m.taskId, m.to ?? null, m.about ?? null, m.closesQuestions ?? false, m.text]), [
-    [1, 'a1', null, true, 'Open questions m1, m3 were closed because #1 was completed.'],
+    [1, null, null, true, 'Open questions m1, m3 were closed because #1 was completed.'], // the completer's own: addressed to nobody
     [1, 'a2', null, true, 'Open question m2 was closed because #1 was completed.'],
     [2, null, null, false, "#1 is done — #2 no longer waits on dependencies; it still waits for the human's approval."],
     [3, null, 'unblocked', false, '#1 is done — #3 is unblocked.'],
@@ -322,6 +322,26 @@ test('completion closes open questions with a note to each asker, and leaves Bac
   assert.deepEqual(out.result, { id: 1, unblocked: [3] });
   assert.deepEqual(ctx.state.tasks[1].openQuestions, []);
   assert.equal(columnOf(ctx.state.tasks[2], ctx.state.tasks), 'backlog');
+});
+
+test('the completer is never sent a note about closing its own questions; the closing is still recorded (§5)', () => {
+  const q = (id, author) => ({ id, to: 'any', author, at: 0, text: 'Which oven?' });
+  // only the completer asked: the questions are still closed with a system note, addressed to nobody
+  const solo = ctxWith({ tasks: [{ id: 1, assignee: 'a1', openQuestions: [q('m1', 'a1'), q('m2', 'a1')] }] });
+  const out = apply(solo, completeTask(solo, { id: 1, summary: 'Shipped.' }));
+  const notes = out.events.filter((e) => e.data.message?.kind === 'system').map((e) => e.data.message);
+  assert.deepEqual(notes.map((m) => [m.to ?? null, m.closesQuestions, m.text]), [
+    [null, true, 'Open questions m1, m2 were closed because #1 was completed.'],
+  ]);
+  assert.ok(solo.state.messages.every((m) => m.to !== 'a1'), 'nothing of this completion is addressed to the completer');
+  assert.deepEqual(solo.state.tasks[1].openQuestions, []);
+  // another asker still gets its note, whoever completes: here Jade completes and Amber asked
+  const other = ctxWith({ agentId: 'a2', tasks: [{ id: 1, assignee: 'a2', openQuestions: [q('m1', 'a1'), q('m2', 'a2')] }] });
+  const closing = completeTask(other, { id: 1, summary: 'Shipped.' }).events.filter((e) => e.data.message?.closesQuestions);
+  assert.deepEqual(closing.map((e) => [e.data.message.to, e.data.message.text]), [
+    ['a1', 'Open question m1 was closed because #1 was completed.'],
+    [null, 'Open question m2 was closed because #1 was completed.'],
+  ]);
 });
 
 test('message inputs are type-checked; to and replyTo only go with the kind that uses them', () => {

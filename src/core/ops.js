@@ -700,8 +700,10 @@ export function postMessage(ctx, input) {
 
 /**
  * complete_task (§8, §5, §10). Only the holder completes: an unclaimed task is claimed first, so the
- * approval and dependency checks of claiming always apply. Open questions are closed with a note to
- * each asker that lists them. Each dependent that no longer waits on any dependency gets a note:
+ * approval and dependency checks of claiming always apply. Open questions are closed with a system
+ * note per asker that lists them (§5), addressed to that asker; the note for the completer's own
+ * questions is addressed to nobody, so an agent is never pinged about its own action. Each
+ * dependent that no longer waits on any dependency gets a note:
  * "unblocked" (about: 'unblocked') when nothing else holds it back, otherwise that it still waits
  * for the human's approval or still has an open question. A dependency on a task that does not
  * exist counts as satisfied (derive.blockers).
@@ -725,7 +727,8 @@ export function completeTask(ctx, input) {
   for (const q of t.openQuestions) asked.set(q.author ?? null, [...(asked.get(q.author ?? null) ?? []), q.id]);
   for (const [asker, ids] of asked) {
     const which = ids.length === 1 ? `Open question ${ids[0]} was` : `Open questions ${ids.join(', ')} were`;
-    events.push(systemNote(t.id, `${which} closed because #${t.id} was completed.`, { closesQuestions: true, to: asker }));
+    const to = asker === ctx.agentId ? null : asker;
+    events.push(systemNote(t.id, `${which} closed because #${t.id} was completed.`, { closesQuestions: true, to }));
   }
   events.push(messageEvent(ctx, t.id, 'summary', summary));
   events.push({ type: 'task.completed', actor: ctx.agentId, data: { id: t.id, summary, completedByName: me.name } });
