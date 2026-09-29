@@ -4765,7 +4765,9 @@ Record anything unexpected as a task. Plan 3 runs the full acceptance script.
     - run housekeeping through `transact`'s `before`;
     - always return the registry;
     - add a test showing that a session returning after `claimTimeoutHours` loses its claim at its first prompt and is pinged about it.
+  - **Task 18:** the skill tells the agent to keep its task's checklist with `update_task` `checklist` when it plans steps and as it finishes them (the todo mirror only works where `TodoWrite` exists).
   - **Task 17:**
+    - `update_task` accepts `checklist` (the whole list, `[{ text, done }]`) on the agent's own claimed task, through ops (reuse `syncChecklist`'s cleaning; refuse it on a task the agent does not hold, with a clear message);
     - error messages returned to the agent that quote board text (task titles in `BoardError` messages) put that text inside the `<agentboard-data>` fence, like the PreToolUse denial does;
     - `post_message` replies with the new message id (for example "Posted question m14 on #3."), so the asker can match the answer ping that names it;
     - pings and `whats_new` share Task 15's `formatPing`, so the wording is identical;
@@ -4782,6 +4784,7 @@ Record anything unexpected as a task. Plan 3 runs the full acceptance script.
     - add a test for a session that ends and starts again in the same process (`/clear`): the server then acts as the new agent. When only an ended agent matches, it answers with the "not registered yet" error;
     - run housekeeping through `before`;
     - reload config on every call.
+  - **Task 19:** the smoke test confirms that `CLAUDE_PID` and `CLAUDE_CODE_SESSION_ID` reach both hook commands and the MCP server process (they are set in Claude Code's tool environment but not documented for hooks).
   - **Follow-ups (done):**
     - `transact` saves the registry whenever `before` ran;
     - `folderMissing` returns false for relative paths;
