@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   ALLOWED_EMAIL,
+  cutAtScissors,
   decodeText,
   findMatches,
   fold,
@@ -12,10 +13,11 @@ import {
   parseRawDiff,
   parseRevListObjects,
   parseTerms,
+  splitIdent,
 } from '../../../scripts/lib/denylist.mjs';
 
 const NFC = 'Élodie'; // precomposed É
-const NFD = 'Élodie'; // E + combining acute accent
+const NFD = 'E\u0301lodie'; // E + combining acute accent
 
 /** Encodes text as UTF-16 with a BOM. */
 function utf16(text, bigEndian = false) {
@@ -35,7 +37,7 @@ test('parseTerms decodes UTF-8 with and without a BOM', () => {
   const body = `# list\n${NFC}\nZorbaCorp\n`;
   assert.deepEqual(parseTerms(Buffer.from(body, 'utf8')), ['elodie', 'zorbacorp']);
   assert.deepEqual(parseTerms(Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(body, 'utf8')])), ['elodie', 'zorbacorp']);
-  assert.deepEqual(parseTerms(`﻿${body}`), ['elodie', 'zorbacorp']);
+  assert.deepEqual(parseTerms(`\uFEFF${body}`), ['elodie', 'zorbacorp']);
 });
 
 test('parseTerms decodes UTF-16LE and UTF-16BE by BOM', () => {
@@ -113,7 +115,59 @@ test('maskTerms hides every variant of every term and keeps the rest', () => {
 
 test('maskTerms swallows accents that trail the match', () => {
   // "elodié" with a combining accent on the last letter.
-  assert.equal(maskTerms('x/elodié/y', ['elodie']), 'x/***/y');
+  assert.equal(maskTerms('x/elodie\u0301/y', ['elodie']), 'x/***/y');
+});
+
+const SOFT_HYPHEN = '\u00AD';
+const ZERO_WIDTH_SPACE = '\u200B';
+
+test('fold removes invisible format characters', () => {
+  assert.equal(fold(`zorba${SOFT_HYPHEN}corp`), 'zorbacorp');
+  assert.equal(fold(`Zorba${ZERO_WIDTH_SPACE}Corp\u200D`), 'zorbacorp');
+  assert.deepEqual(parseTerms(`zorba${SOFT_HYPHEN}corp`), ['zorbacorp']);
+});
+
+test('invisible characters inside a term neither hide it nor escape the mask', () => {
+  const terms = ['zorbacorp'];
+  const hidden = `docs/zorba${SOFT_HYPHEN}corp-notes.md`;
+  assert.deepEqual(findMatches([{ path: hidden, text: `x\nZORBA${ZERO_WIDTH_SPACE}CORP` }], terms), [
+    { path: hidden, line: 0, term: 1 },
+    { path: hidden, line: 2, term: 1 },
+  ]);
+  assert.equal(maskTerms(hidden, terms), 'docs/***-notes.md');
+  assert.equal(maskTerms(`a zorbacorp${ZERO_WIDTH_SPACE} b`, terms), 'a *** b');
+});
+
+test('masking covers every hit that matching finds', () => {
+  const terms = parseTerms(`zorbacorp\nquux-project\n${NFC}\nΛΟΓΟΣ`);
+  const samples = [
+    `C:/work/ZorbaCorp/${NFD}/notes.md`,
+    `zorba${SOFT_HYPHEN}corp and quux${ZERO_WIDTH_SPACE}-project`,
+    'zorbacorpzorbacorp quux-projectquux-project',
+    `${NFC.toUpperCase()}${NFD}`,
+    'λογος and ΛΟΓΟΣ and λογοσ',
+    'İzorbacorp\u0307',
+  ];
+  for (const sample of samples) {
+    assert.ok(matchText(sample, terms).length > 0, 'the sample should match');
+    assert.deepEqual(matchText(maskTerms(sample, terms), terms), [], 'masked text must not match any more');
+  }
+});
+
+test('cutAtScissors drops the scissors line and everything below, whatever the comment string', () => {
+  const cut = '------------------------ >8 ------------------------';
+  assert.equal(cutAtScissors(`fix: x\n\n# ${cut}\n# Do not modify.\ndiff --git\n`), 'fix: x\n\n');
+  assert.equal(cutAtScissors(`fix: x\n; ${cut}\nbelow\n`), 'fix: x\n');
+  assert.equal(cutAtScissors('fix: x\n# not a cut line\n'), 'fix: x\n# not a cut line\n');
+});
+
+test('splitIdent separates name and e-mail', () => {
+  assert.deepEqual(splitIdent('Test Placeholder <test@example.invalid> 1700000000 +0000'), {
+    name: 'Test Placeholder',
+    email: 'test@example.invalid',
+  });
+  assert.deepEqual(splitIdent('Test Placeholder <test@example.invalid>'), { name: 'Test Placeholder', email: 'test@example.invalid' });
+  assert.equal(splitIdent('no e-mail here'), null);
 });
 
 test('only no-reply or placeholder commit emails are allowed', () => {
@@ -127,7 +181,7 @@ test('only no-reply or placeholder commit emails are allowed', () => {
 test('decodeText reads UTF-16 by BOM and UTF-8 otherwise', () => {
   assert.equal(decodeText(utf16('zorbacorp\n')), 'zorbacorp\n');
   assert.equal(decodeText(utf16('zorbacorp\n', true)), 'zorbacorp\n');
-  assert.equal(decodeText(Buffer.from('﻿zorbacorp', 'utf8')), 'zorbacorp');
+  assert.equal(decodeText(Buffer.from('\uFEFFzorbacorp', 'utf8')), 'zorbacorp');
   assert.equal(decodeText(Buffer.from(NFC, 'utf8')), NFC);
 });
 

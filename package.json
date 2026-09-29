@@ -10,6 +10,7 @@
   "files": ["src/", ".claude-plugin/", "hooks/", "skills/", ".mcp.json", "LICENSE", "README.md"],
   "scripts": {
     "test": "node --test \"test/**/*.test.js\"",
-    "check:leaks": "node scripts/check-denylist.mjs --all"
+    "check:leaks": "node scripts/check-denylist.mjs --all",
+    "check:history": "node scripts/check-denylist.mjs --history"
   }
 }

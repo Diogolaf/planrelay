@@ -10,17 +10,18 @@ export const ALLOWED_EMAIL = /^[^@\s<>]+@(users\.noreply\.github\.com|example\.i
 const CONTROL = /\p{Cc}/u;
 
 /**
- * Folds text so comparisons ignore case and accents.
+ * Folds text so comparisons ignore case, accents and invisible characters.
  * Canonical decomposition (NFD gives the same result for NFC and NFD input) splits
- * "é" into "e" + a combining accent; the accents are stripped; then the text is lowercased.
- * "Élodie", "ELODIE" and "Élodie" all fold to "elodie".
+ * "é" into "e" + a combining accent; the accents and the invisible format characters
+ * (soft hyphen, zero-width space, BOM, bidi marks) are stripped; then the text is lowercased.
+ * "Élodie", "ELODIE" and "E\u0301lodie" all fold to "elodie".
  * The Greek final sigma is folded to the ordinary sigma so the result of each character
  * does not depend on its neighbours (maskTerms relies on that).
  * Line breaks are never changed, so line numbers survive folding.
  * @param {string} text
  */
 export function fold(text) {
-  return text.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase().replace(/ς/g, 'σ');
+  return text.normalize('NFD').replace(/[\p{M}\p{Cf}]/gu, '').toLowerCase().replace(/ς/g, 'σ');
 }
 
 /** Swaps byte pairs (UTF-16BE <-> UTF-16LE). Throws on an odd length. */
@@ -52,7 +53,7 @@ function decodeList(bytes) {
  * @returns {string[]}
  */
 export function parseTerms(input) {
-  const raw = typeof input === 'string' ? input.replace(/^﻿/, '') : decodeList(input);
+  const raw = typeof input === 'string' ? input.replace(/^\uFEFF/, '') : decodeList(input);
   const terms = [];
   raw.split(/\r\n|\n|\r/).forEach((line, i) => {
     const entry = line.trim();
@@ -61,10 +62,30 @@ export function parseTerms(input) {
       throw new Error(`line ${i + 1} of the denylist contains a control character; save the list as UTF-8 (or UTF-16 with a BOM)`);
     }
     const term = fold(entry);
-    if (!term) throw new Error(`line ${i + 1} of the denylist is empty once accents are removed`);
+    if (!term) throw new Error(`line ${i + 1} of the denylist is empty once accents and invisible characters are removed`);
     terms.push(term);
   });
   return terms;
+}
+
+/**
+ * Cuts a commit message at git's scissors line ("# ------------------------ >8 ------------------------",
+ * with any comment string). Git drops that line and everything below it (the diff of `git commit -v`).
+ * @param {string} text
+ */
+export function cutAtScissors(text) {
+  const m = /^\S+ -{24} >8 -{24}\r?$/m.exec(text);
+  return m ? text.slice(0, m.index) : text;
+}
+
+/**
+ * Splits a git identity ("Name <email>", optionally followed by a date) into its parts.
+ * @param {string} ident
+ * @returns {{ name: string, email: string } | null}
+ */
+export function splitIdent(ident) {
+  const m = /^(.*?) ?<([^<>]*)>( .*)?$/.exec(ident);
+  return m ? { name: m[1], email: m[2] } : null;
 }
 
 /**

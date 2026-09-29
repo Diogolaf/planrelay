@@ -9,9 +9,10 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
-const SCRIPT = fileURLToPath(new URL('../../scripts/check-denylist.mjs', import.meta.url));
+const REPO_ROOT = fileURLToPath(new URL('../../', import.meta.url));
+const SCRIPT = path.join(REPO_ROOT, 'scripts', 'check-denylist.mjs');
 const TERMS = ['zorbacorp', 'quux-project', 'Élodie']; // entries #1, #2, #3
 const LIST = `# invented test terms\n${TERMS.join('\n')}\n`;
 
@@ -46,8 +47,10 @@ function tempRepo() {
     AGENTBOARD_DENYLIST_FILE: path.join(home, 'no-such-list.txt'),
   });
 
+  /** Runs git and returns the result; `extra` adds environment variables. */
+  const gitRun = (args, extra = {}) => spawnSync('git', args, { cwd: repo, env: { ...env, ...extra }, encoding: 'utf8' });
   const git = (...args) => {
-    const r = spawnSync('git', args, { cwd: repo, env, encoding: 'utf8' });
+    const r = gitRun(args);
     assert.equal(r.status, 0, `git ${args.join(' ')}: ${r.stderr}`);
     return r.stdout;
   };
@@ -72,7 +75,42 @@ function tempRepo() {
     }
     return spawnSync(process.execPath, [script, ...args], { cwd, env: childEnv, encoding: 'utf8' });
   };
-  return { dir, home, repo, git, write, run };
+  /**
+   * Turns on this repository's real hooks: .githooks and scripts/ are copied into the
+   * work tree (and excluded from git), exactly where the hooks expect them.
+   */
+  const enableHooks = () => {
+    fs.cpSync(path.join(REPO_ROOT, '.githooks'), path.join(repo, '.githooks'), { recursive: true });
+    fs.cpSync(path.join(REPO_ROOT, 'scripts'), path.join(repo, 'scripts'), { recursive: true });
+    for (const hook of fs.readdirSync(path.join(repo, '.githooks'))) fs.chmodSync(path.join(repo, '.githooks', hook), 0o755);
+    fs.appendFileSync(path.join(repo, '.git', 'info', 'exclude'), '.githooks/\nscripts/\n');
+    git('config', 'core.hooksPath', '.githooks');
+  };
+  /**
+   * Runs a real `git commit` through the hooks with a scripted editor: it prepends
+   * `message` to git's template, as a person would, and keeps a copy of what it saw.
+   */
+  const commitWithEditor = (args, message) => {
+    const editor = path.join(dir, 'editor.mjs');
+    fs.writeFileSync(
+      editor,
+      "import fs from 'node:fs';\n" +
+        'const file = process.argv[2];\n' +
+        "const template = fs.readFileSync(file, 'utf8');\n" +
+        'fs.writeFileSync(process.env.TEST_EDITOR_COPY, template);\n' +
+        'fs.writeFileSync(file, process.env.TEST_EDITOR_MESSAGE + template);\n',
+    );
+    const slash = (p) => p.replace(/\\/g, '/');
+    const seen = path.join(dir, 'editor-saw.txt');
+    const r = gitRun(['commit', '-q', ...args], {
+      GIT_EDITOR: `"${slash(process.execPath)}" "${slash(editor)}"`,
+      TEST_EDITOR_MESSAGE: message,
+      TEST_EDITOR_COPY: seen,
+    });
+    return { ...r, template: fs.existsSync(seen) ? fs.readFileSync(seen, 'utf8') : '' };
+  };
+  const head = () => git('rev-parse', 'HEAD').trim();
+  return { dir, home, repo, git, gitRun, write, run, enableHooks, commitWithEditor, head };
 }
 
 const fold = (s) => s.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
@@ -114,7 +152,7 @@ test('a clean staged file passes', () => {
 
 test('decomposed accents and UTF-16 files are caught', () => {
   const { write, git, run } = tempRepo();
-  write('a.txt', 'signed by ÉLODIE\n');
+  write('a.txt', 'signed by E\u0301LODIE\n');
   write('b.txt', Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('line one\r\nzorbacorp\r\n', 'utf16le')]));
   git('add', '.');
   const r = run(['--staged']);
@@ -259,4 +297,146 @@ test('the guard still runs when started through a linked path', () => {
   assert.equal(r.status, 1, r.stderr);
   assert.match(r.stderr, /matches entry #1/);
   assertNoLeak(r);
+});
+
+test('--message ignores what git will not store, unless git keeps it', () => {
+  const { home, git, run } = tempRepo();
+  const msg = path.join(home, 'COMMIT_EDITMSG');
+  const cut = '------------------------ >8 ------------------------';
+  fs.writeFileSync(msg, `fix: tidy\n\n# deleted: docs/zorbacorp.md\n# ${cut}\n-zorbacorp\n`);
+  // Editor commit (the default): comment lines and the diff below the scissors are dropped by git.
+  assert.equal(run(['--message', msg]).status, 0);
+  // No editor (-m, -F): git tells the hook with GIT_EDITOR=: and keeps comment lines.
+  const noEditor = run(['--message', msg], { GIT_EDITOR: ':' });
+  assert.equal(noEditor.status, 1, noEditor.stderr);
+  assert.match(noEditor.stderr, /commit message:3 matches entry #1/);
+  assertNoLeak(noEditor);
+  // core.commentChar is honoured.
+  git('config', 'core.commentChar', ';');
+  fs.writeFileSync(msg, 'fix: tidy\n; zorbacorp in a comment\n');
+  assert.equal(run(['--message', msg]).status, 0);
+  git('config', '--unset', 'core.commentChar');
+  // commit.cleanup=verbatim keeps comment lines, so they are scanned.
+  git('config', 'commit.cleanup', 'verbatim');
+  fs.writeFileSync(msg, `fix: tidy\n\n# deleted: docs/zorbacorp.md\n# ${cut}\n-zorbacorp\n`);
+  const verbatim = run(['--message', msg]);
+  assert.equal(verbatim.status, 1, verbatim.stderr);
+  assert.match(verbatim.stderr, /commit message:3 matches entry #1/);
+  assertNoLeak(verbatim);
+});
+
+test('real hooks: pre-commit blocks a staged term', () => {
+  const { write, git, gitRun, enableHooks, head } = tempRepo();
+  write('a.txt', 'clean\n');
+  git('add', '.');
+  git('commit', '-qm', 'start');
+  enableHooks();
+  const before = head();
+  write('notes.md', 'met ZorbaCorp today\n');
+  git('add', 'notes.md');
+  const r = gitRun(['commit', '-q', '-m', 'add notes']);
+  assert.notEqual(r.status, 0, 'the commit should be refused');
+  assert.match(r.stderr, /denylist: notes\.md:1 matches entry #1/);
+  assert.equal(head(), before);
+  assertNoLeak(r);
+});
+
+test('real hooks: an editor commit that removes a leaking file passes, with or without -v', () => {
+  const { write, git, enableHooks, commitWithEditor, head } = tempRepo();
+  write('docs/zorbacorp-notes.md', 'zorbacorp was here\n');
+  write('docs/other-zorbacorp.md', 'zorbacorp again\n');
+  git('add', '.');
+  git('commit', '-qm', 'add notes (before the guard)');
+  enableHooks();
+
+  git('rm', '-q', 'docs/zorbacorp-notes.md');
+  const plain = commitWithEditor([], 'chore: remove the notes\n');
+  assert.match(fold(plain.template), /deleted: +docs\/zorbacorp-notes\.md/, 'git lists the removed file in the template');
+  assert.equal(plain.status, 0, plain.stderr);
+  assert.equal(git('log', '-1', '--format=%s').trim(), 'chore: remove the notes');
+
+  const before = head();
+  git('rm', '-q', 'docs/other-zorbacorp.md');
+  const verbose = commitWithEditor(['-v'], 'chore: remove the other notes\n');
+  assert.match(verbose.template, / >8 /, 'git -v adds the scissors line and the diff');
+  assert.equal(verbose.status, 0, verbose.stderr);
+  assert.notEqual(head(), before);
+});
+
+test('real hooks: a term typed in the commit message is still blocked', () => {
+  const { write, git, gitRun, enableHooks, commitWithEditor, head } = tempRepo();
+  write('a.txt', 'clean\n');
+  git('add', '.');
+  git('commit', '-qm', 'start');
+  enableHooks();
+  const before = head();
+
+  write('a.txt', 'still clean\n');
+  git('add', 'a.txt');
+  const typed = commitWithEditor([], 'chore: tidy\n\nThanks to the Zorbacorp team.\n');
+  assert.notEqual(typed.status, 0, 'the commit should be refused');
+  assert.match(typed.stderr, /denylist: commit message:3 matches entry #1/);
+  assertNoLeak(typed);
+
+  // With -m git keeps lines that start with '#', so they are scanned too.
+  const dashM = gitRun(['commit', '-q', '-m', 'chore: tidy', '-m', '#42 follow-up for quux-project']);
+  assert.notEqual(dashM.status, 0, 'the commit should be refused');
+  assert.match(dashM.stderr, /denylist: commit message:3 matches entry #2/);
+  assertNoLeak(dashM);
+  assert.equal(head(), before);
+});
+
+test('--history refuses commit e-mails that are not allowed, without printing them', () => {
+  const { write, git, gitRun, run } = tempRepo();
+  write('a.txt', 'clean\n');
+  git('add', '.');
+  git('commit', '-qm', 'start');
+  assert.equal(run(['--history']).status, 0);
+
+  git('commit', '-q', '--allow-empty', '-m', 'by someone', '--author=Someone <someone@mail.example.com>');
+  const author = run(['--history']);
+  assert.equal(author.status, 1, author.stderr);
+  assert.match(author.stderr, /denylist: commit [0-9a-f]{7} author e-mail is not allowed/);
+  assert.doesNotMatch(author.stderr, /committer e-mail/);
+  assertNoLeak(author, ['someone@mail.example.com', 'mail.example.com']);
+
+  const r = gitRun(['commit', '-q', '--allow-empty', '-m', 'committed elsewhere'], { GIT_COMMITTER_EMAIL: 'robot@mail.example.com' });
+  assert.equal(r.status, 0, r.stderr);
+  const committer = run(['--history']);
+  assert.equal(committer.status, 1, committer.stderr);
+  assert.match(committer.stderr, /denylist: commit [0-9a-f]{7} committer e-mail is not allowed/);
+  assertNoLeak(committer, ['robot@mail.example.com', 'mail.example.com']);
+});
+
+test('--history checks annotated tags: tagger e-mail and masked names', () => {
+  const { write, git, run } = tempRepo();
+  write('a.txt', 'clean\n');
+  git('add', '.');
+  git('commit', '-qm', 'start');
+  git('tag', '-a', 'v1', '-m', 'first release');
+  assert.equal(run(['--history']).status, 0);
+
+  git('-c', 'user.email=tagger@mail.example.com', 'tag', '-a', 'v2', '-m', 'second release');
+  git('tag', '-a', 'zorbacorp-v3', '-m', 'third release');
+  const r = run(['--history']);
+  assert.equal(r.status, 1, r.stderr);
+  assert.match(r.stderr, /denylist: tag v2 tagger e-mail is not allowed/);
+  assert.match(r.stderr, /denylist: tag \*\*\*-v3 metadata matches entry #1/);
+  assert.match(r.stderr, /denylist: ref refs\/tags\/\*\*\*-v3 matches entry #1/);
+  assert.doesNotMatch(r.stderr, /tag v1 /);
+  assertNoLeak(r, ['tagger@mail.example.com', 'mail.example.com']);
+});
+
+test('--history refuses a shallow clone', () => {
+  const { dir, repo, write, git, run } = tempRepo();
+  write('a.txt', 'one\n');
+  git('add', '.');
+  git('commit', '-qm', 'one');
+  write('a.txt', 'two\n');
+  git('commit', '-qam', 'two');
+  const clone = path.join(dir, 'clone');
+  git('clone', '-q', '--depth', '1', pathToFileURL(repo).href, clone);
+  const r = run(['--history'], {}, { cwd: clone });
+  assert.equal(r.status, 1, r.stderr);
+  assert.match(r.stderr, /shallow clone/);
 });

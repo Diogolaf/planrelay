@@ -8,8 +8,9 @@
 // Modes:
 //   --staged          the index (pre-commit, pre-merge-commit) plus the commit identity
 //   --all             tracked files in the working tree (npm run check:leaks, CI)
-//   --history         every blob, path, commit, annotated tag and ref name reachable from all refs
-//   --message <file>  a commit message (commit-msg)
+//   --history         every blob, path, commit, annotated tag and ref name reachable from all refs,
+//                     plus the commit and tagger e-mails (refused in a shallow clone)
+//   --message <file>  the part of a commit message git will store (commit-msg)
 //
 // Fails closed: any git or IO error aborts the scan with exit code 1.
 // This file always runs main (importing it runs the scan); the pure logic lives in
@@ -20,6 +21,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   ALLOWED_EMAIL,
+  cutAtScissors,
   decodeText,
   findMatches,
   maskTerms,
@@ -28,6 +30,7 @@ import {
   parseRawDiff,
   parseRevListObjects,
   parseTerms,
+  splitIdent,
 } from './lib/denylist.mjs';
 
 const MAX_BUFFER = 512 * 1024 * 1024;
@@ -127,12 +130,12 @@ function checkIdentity(root, terms, report) {
       report(`check-denylist: the ${who} identity is not configured.`);
       continue;
     }
-    const m = /^(.*) <([^<>]*)> \d+ [+-]\d{4}$/.exec(ident);
-    if (!m) {
+    const parts = splitIdent(ident);
+    if (!parts) {
       report(`check-denylist: the ${who} identity could not be parsed.`);
       continue;
     }
-    const [, name, email] = m;
+    const { name, email } = parts;
     if (!ALLOWED_EMAIL.test(email)) {
       report(`check-denylist: the ${who} e-mail is not allowed; use a GitHub no-reply address or an @example.invalid placeholder.`);
     }
@@ -185,6 +188,11 @@ function scanAll(root, terms, report) {
 
 /** Everything reachable from any ref: what a push would publish. */
 function scanHistory(root, terms, report) {
+  // A shallow clone lacks the older commits, so a clean result would be meaningless.
+  if (git(root, ['rev-parse', '--is-shallow-repository']).toString('utf8').trim() !== 'false') {
+    throw new GuardError('this is a shallow clone, so older history cannot be checked; run `git fetch --unshallow` first.');
+  }
+
   // Every object reachable from all refs, with the first path git gives it.
   const listed = parseRevListObjects(git(root, ['rev-list', '--all', '--objects']));
   const shas = [...new Set(listed.map((o) => o.sha))];
@@ -227,30 +235,58 @@ function scanHistory(root, terms, report) {
   }
 
   // Commit metadata: author and committer names and e-mails, full messages (raw, no mailmap).
+  // Both e-mails must also be allowed addresses, as the pre-commit identity check demands.
   const log = git(root, [
     'log', '--all', '-z', '--no-show-signature', '--no-use-mailmap', '--encoding=UTF-8', '--no-color',
     '--format=%H%n%an%n%ae%n%cn%n%ce%n%B',
   ]).toString('utf8');
   for (const record of log.split('\0')) {
-    const body = record.replace(/^\n+/, '');
-    const nl = body.indexOf('\n');
-    if (nl === -1) continue;
-    const found = new Set(matchText(body.slice(nl + 1), terms).map((h) => h.term));
-    for (const k of found) report(`denylist: commit ${short(body.slice(0, nl))} metadata matches entry #${k}`);
+    const lines = record.replace(/^\n+/, '').split('\n');
+    if (lines.length < 5) continue;
+    const [sha, , authorEmail, , committerEmail] = lines;
+    if (!ALLOWED_EMAIL.test(authorEmail)) report(`denylist: commit ${short(sha)} author e-mail is not allowed`);
+    if (!ALLOWED_EMAIL.test(committerEmail)) report(`denylist: commit ${short(sha)} committer e-mail is not allowed`);
+    const found = new Set(matchText(lines.slice(1).join('\n'), terms).map((h) => h.term));
+    for (const k of found) report(`denylist: commit ${short(sha)} metadata matches entry #${k}`);
   }
 
-  // Annotated tags (tagger, name, message) and ref names are published by a push too.
+  // Annotated tags (name, tagger, message) and ref names are published by a push too.
   const tagShas = shas.filter((s) => types.get(s) === 'tag');
   for (const [sha, content] of readObjects(root, tagShas, 'tag')) {
-    const found = new Set(matchText(decodeText(content), terms).map((h) => h.term));
-    for (const k of found) report(`denylist: tag ${short(sha)} metadata matches entry #${k}`);
+    const text = decodeText(content);
+    const header = text.split('\n\n')[0].split('\n');
+    const name = header.find((l) => l.startsWith('tag '))?.slice(4) || short(sha);
+    const tagger = header.find((l) => l.startsWith('tagger '));
+    if (tagger && !ALLOWED_EMAIL.test(splitIdent(tagger.slice(7))?.email ?? '')) {
+      report(`denylist: tag ${name} tagger e-mail is not allowed`);
+    }
+    const found = new Set(matchText(text, terms).map((h) => h.term));
+    for (const k of found) report(`denylist: tag ${name} metadata matches entry #${k}`);
   }
   for (const ref of git(root, ['for-each-ref', '--format=%(refname)']).toString('utf8').split('\n').filter(Boolean)) {
     for (const h of matchText(ref, terms)) report(`denylist: ref ${ref} matches entry #${h.term}`);
   }
 }
 
-/** A commit message file, as the commit-msg hook receives it (comment lines included). */
+/**
+ * The part of a commit message file that git will store. The commit-msg hook receives the
+ * file before git cleans it up, so an editor commit still holds git's template: comment
+ * lines (branch, status, file names, even of files being deleted) and, with -v, the diff
+ * below the scissors line. Scanning those would block a commit that removes a leak.
+ */
+function storedMessage(text) {
+  // Git sets GIT_EDITOR=: for the hook when no editor runs (-m, -F, --no-edit). There is no
+  // template then, and git keeps comment lines by default, so everything is scanned.
+  if (process.env.GIT_EDITOR === ':') return text;
+  const cut = cutAtScissors(text);
+  const cleanup = git(process.cwd(), ['config', '--default', 'default', 'commit.cleanup']).toString('utf8').trim();
+  // verbatim and whitespace keep comment lines in the stored message.
+  if (cleanup === 'verbatim' || cleanup === 'whitespace') return cut;
+  // git stripspace honours core.commentChar, as git commit does.
+  return git(process.cwd(), ['stripspace', '--strip-comments'], cut).toString('utf8');
+}
+
+/** A commit message file (commit-msg hook): only what git will store is scanned. */
 function scanMessage(file, terms, report) {
   let bytes;
   try {
@@ -258,7 +294,9 @@ function scanMessage(file, terms, report) {
   } catch (err) {
     throw new GuardError(`could not read the commit message file (${err.code || err.name}).`);
   }
-  for (const h of matchText(decodeText(bytes), terms)) report(`denylist: commit message:${h.line} matches entry #${h.term}`);
+  for (const h of matchText(storedMessage(decodeText(bytes)), terms)) {
+    report(`denylist: commit message:${h.line} matches entry #${h.term}`);
+  }
 }
 
 function main(argv) {
