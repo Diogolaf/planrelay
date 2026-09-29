@@ -240,12 +240,11 @@ test('outside git the board does not depend on how the folder is spelled', { ski
   assert.ok(samePath(lowerDrive, dir.toUpperCase()));
 });
 
-test('outside git a subfolder reuses the board of the nearest project folder', () => {
+test('outside git a subfolder uses the board of the nearest folder above it with .agentboard/', () => {
   const base = track(tempDir());
   const home = track(tempDir());
   const opts = isolated(base, home);
 
-  // a folder with a .agentboard/ config folder
   const proj = path.join(base, 'proj');
   fs.mkdirSync(path.join(proj, '.agentboard'), { recursive: true });
   fs.mkdirSync(path.join(proj, 'src', 'deep'), { recursive: true });
@@ -256,16 +255,12 @@ test('outside git a subfolder reuses the board of the nearest project folder', (
   assert.equal(deep.projectName, 'proj');
   assert.equal(deep.configRoot, proj);
 
-  // a folder that already has a board
-  const notes = path.join(base, 'notes');
-  const sub = path.join(notes, 'drafts');
-  fs.mkdirSync(sub, { recursive: true });
-  const board = resolveBoard(notes, opts).boardDir;
-  assert.notEqual(resolveBoard(sub, opts).boardDir, board);
-  fs.mkdirSync(board, { recursive: true });
-  const reused = resolveBoard(sub, opts);
-  assert.equal(reused.boardDir, board);
-  assert.equal(reused.repoRoot, notes);
+  // the nearest marker wins, and a marked folder is its own answer
+  const tools = path.join(proj, 'tools');
+  fs.mkdirSync(path.join(tools, '.agentboard'), { recursive: true });
+  fs.mkdirSync(path.join(tools, 'x'));
+  assert.equal(resolveBoard(path.join(tools, 'x'), opts).repoRoot, tools);
+  assert.equal(resolveBoard(tools, opts).repoRoot, tools);
 
   // no marker: the host's project folder anchors the board, and folders outside it keep their own
   const app = path.join(base, 'app');
@@ -279,6 +274,31 @@ test('outside git a subfolder reuses the board of the nearest project folder', (
   assert.equal(anchored.boardDir, resolveBoard(app, opts).boardDir);
   assert.equal(resolveBoard(elsewhere, { ...opts, projectDir: app }).repoRoot, elsewhere);
   assert.equal(resolveBoard(lib, opts).repoRoot, lib);
+});
+
+test('outside git a board left by a session in a parent folder does not capture its subfolders', () => {
+  const base = track(tempDir());
+  const home = track(tempDir());
+  const opts = isolated(base, home);
+  const desk = path.join(base, 'Desk');
+  const recipes = path.join(desk, 'recipes');
+  const taxes = path.join(desk, 'taxes', '2026');
+  fs.mkdirSync(path.join(recipes, 'src'), { recursive: true });
+  fs.mkdirSync(taxes, { recursive: true });
+  const own = new Map([recipes, taxes].map((dir) => [dir, resolveBoard(dir, { ...opts, projectDir: dir }).boardDir]));
+
+  // one session runs in the parent folder, which creates its board
+  const deskBoard = resolveBoard(desk, { ...opts, projectDir: desk }).boardDir;
+  fs.mkdirSync(deskBoard, { recursive: true });
+
+  for (const [dir, board] of own) {
+    const b = resolveBoard(dir, { ...opts, projectDir: dir });
+    assert.equal(b.boardDir, board, dir);
+    assert.notEqual(b.boardDir, deskBoard, dir);
+    assert.equal(b.repoRoot, dir, dir);
+  }
+  assert.equal(resolveBoard(path.join(recipes, 'src'), { ...opts, projectDir: recipes }).boardDir, own.get(recipes));
+  assert.equal(resolveBoard(path.join(recipes, 'src'), opts).repoRoot, path.join(recipes, 'src'));
 });
 
 test('inside git, every folder in the host project folder gets the project board (one session, one board)', () => {
@@ -357,9 +377,10 @@ test('outside git, every folder in the host project folder gets the project boar
     assert.equal(b.boardDir, mcp.boardDir, cwd);
     assert.equal(b.repoRoot, app, cwd);
   }
-  // without a project folder each subfolder keeps its own marker or board
+  // without a project folder a subfolder of a marked folder uses that folder, and any other folder its own board
   assert.equal(resolveBoard(path.join(pkg, 'x'), opts).repoRoot, pkg);
   assert.equal(resolveBoard(old, opts).repoRoot, old);
+  assert.equal(resolveBoard(deep, opts).repoRoot, deep);
   // a folder outside the project folder is resolved from itself
   assert.equal(resolveBoard(path.join(other, 'x'), withProject).repoRoot, other);
   // a folder reached through a link is still inside the project folder
@@ -371,11 +392,17 @@ test('outside git, every folder in the host project folder gets the project boar
     linked = false; // links unavailable here
   }
   if (linked) assert.equal(resolveBoard(link, withProject).boardDir, mcp.boardDir);
-  // the search goes up from the project folder, so a board in its parent is shared by the whole session
-  const parentBoard = resolveBoard(workspace, opts).boardDir;
-  fs.mkdirSync(parentBoard, { recursive: true });
-  assert.equal(resolveBoard(app, withProject).boardDir, parentBoard);
-  assert.equal(resolveBoard(deep, withProject).boardDir, parentBoard);
+  // above the project folder a board left by another session is ignored, but a .agentboard/ folder is used by the whole session
+  fs.mkdirSync(resolveBoard(workspace, opts).boardDir, { recursive: true });
+  assert.equal(resolveBoard(app, withProject).boardDir, mcp.boardDir);
+  assert.equal(resolveBoard(deep, withProject).boardDir, mcp.boardDir);
+  fs.mkdirSync(path.join(workspace, '.agentboard'));
+  const marked = resolveBoard(workspace, opts).boardDir;
+  for (const cwd of [app, deep]) {
+    const b = resolveBoard(cwd, withProject);
+    assert.equal(b.boardDir, marked, cwd);
+    assert.equal(b.repoRoot, workspace, cwd);
+  }
 });
 
 test("a .git owned by another user stops the search, like git's dubious-ownership check", () => {
@@ -435,6 +462,31 @@ test('a bare repository with worktrees: the name drops .git or takes the parent 
     assert.ok(samePath(r.boardDir, path.join(tools, '.bare', 'agentboard')), cwd);
     assert.equal(r.configRoot, cwd);
   }
+});
+
+test('configRoot for a bare repository named .git and for a separate git dir is the working folder', () => {
+  const origin = track(tempRepo());
+  const base = track(tempDir());
+
+  const bin = path.join(base, 'bin');
+  fs.mkdirSync(bin);
+  git(bin, 'clone', '-q', '--bare', origin, '.git');
+  const main = path.join(bin, 'main');
+  git(path.join(bin, '.git'), 'worktree', 'add', '-q', main);
+  const b = resolveBoard(main);
+  assert.ok(samePath(b.boardDir, path.join(bin, '.git', 'agentboard')));
+  assert.equal(b.projectName, 'bin');
+  assert.equal(b.configRoot, main);
+
+  const code = path.join(base, 'code', 'app');
+  const store = path.join(base, 'gitdirs', 'app', '.git');
+  fs.mkdirSync(path.dirname(store), { recursive: true });
+  git(base, 'init', '-q', '--separate-git-dir', store, code);
+  const s = resolveBoard(code);
+  assert.ok(samePath(s.gitDir, store));
+  assert.ok(samePath(s.boardDir, path.join(store, 'agentboard')));
+  assert.equal(s.repoRoot, code);
+  assert.equal(s.configRoot, code);
 });
 
 test('at a drive or file-system root the project name is the root itself', () => {

@@ -162,45 +162,60 @@ function repoName(commonDir) {
   return baseName(commonDir);
 }
 
-/**
- * The main worktree, whose `.agentboard/` settings apply to the whole shared board: the folder
- * holding the common dir when that is named `.git`; otherwise (a bare repository, a `.bare`
- * layout, `--separate-git-dir`, a submodule) `fallback`, the caller's own worktree.
- */
-function mainWorktree(commonDir, fallback) {
-  if (path.basename(commonDir) !== '.git') return fallback;
-  const main = path.dirname(commonDir);
-  return isDir(main) ? main : fallback;
+/** True when a git config file says `bare = true`. */
+function isBare(commonDir) {
+  try {
+    return /^\s*bare\s*=\s*true\s*$/im.test(fs.readFileSync(path.join(commonDir, 'config'), 'utf8'));
+  } catch {
+    return false;
+  }
 }
 
 /**
- * The folder a board belongs to outside git, so that `cd` into a subfolder keeps the same board:
- * the nearest folder, from `abs` up, that has a `.agentboard/` folder or already has a board; else
- * `abs`. Above `abs`, the search never considers a file-system root, the home folder or its
- * parents (the home folder holds the global `.agentboard/`, and one board there would swallow
- * every folder below it), or a GIT_CEILING_DIRECTORIES entry, and stops there.
+ * The folder whose `.agentboard/` settings apply to the whole shared board: the main worktree.
+ * - In the main worktree or a submodule (its git dir is the common dir): its own top folder.
+ * - In a linked worktree: the folder holding the common dir when that is a `.git` folder of a
+ *   repository that is not bare; otherwise (a bare repository, including a bare one named `.git`,
+ *   or a `.bare` layout) there is no main checkout, and the worktree's own top folder is used.
+ *   Known gap: for a linked worktree of a `--separate-git-dir` repository whose git dir is named
+ *   `.git`, this gives the folder holding that git dir, not the main checkout, which git does not
+ *   record.
+ */
+function configRootOf({ top, gitDir, commonDir }) {
+  if (gitDir === commonDir) return top;
+  if (path.basename(commonDir) !== '.git' || isBare(commonDir)) return top;
+  return path.dirname(commonDir);
+}
+
+/**
+ * The folder a board belongs to outside git: `start`, unless `start` has no `.agentboard/` folder
+ * and a folder above it has one; then the nearest such folder, so a `cd` into a subfolder of a
+ * marked project keeps its board. Only that deliberate marker counts. Existing boards never do:
+ * every session creates one, so a board above `start` only means a session once ran there (one run
+ * in Desktop must not capture Desktop/recipes). The search never considers a file-system root, the
+ * home folder or its parents (the home folder holds the global `.agentboard/`), or a
+ * GIT_CEILING_DIRECTORIES entry, and stops there.
  * @returns {{ root: string, key: string }} root in the caller's spelling where possible; key hashes to the board folder
  */
-function nonGitFolder(abs, { home, ceilings }) {
-  const real = realOrSelf(abs);
+function nonGitFolder(start, { home, ceilings }) {
+  const real = realOrSelf(start);
+  if (isDir(path.join(real, CONFIG_DIR))) return { root: start, key: fold(real) };
   const homeKey = fold(realOrSelf(home));
-  const boards = path.join(home, CONFIG_DIR, 'boards');
   // Every parent of a real path is a real path, so parents need no realpath call of their own.
   let dir = real;
-  for (let up = 0; ; up++) {
-    const key = fold(dir);
-    if (up > 0 && (path.dirname(dir) === dir || within(homeKey, key) || ceilings.has(key))) break;
-    if (isDir(path.join(dir, CONFIG_DIR)) || isDir(path.join(boards, sha256(key)))) {
-      if (up === 0) return { root: abs, key };
-      let spelled = abs;
-      for (let i = 0; i < up; i++) spelled = path.dirname(spelled);
-      return { root: fold(realOrSelf(spelled)) === key ? spelled : dir, key };
-    }
+  for (let up = 1; ; up++) {
     const parent = path.dirname(dir);
     if (parent === dir) break;
     dir = parent;
+    const key = fold(dir);
+    if (path.dirname(dir) === dir || within(homeKey, key) || ceilings.has(key)) break;
+    if (isDir(path.join(dir, CONFIG_DIR))) {
+      let spelled = start;
+      for (let i = 0; i < up; i++) spelled = path.dirname(spelled);
+      return { root: fold(realOrSelf(spelled)) === key ? spelled : dir, key };
+    }
   }
-  return { root: abs, key: fold(real) };
+  return { root: start, key: fold(real) };
 }
 
 /**
@@ -255,7 +270,7 @@ export function resolveBoard(cwd, opts = {}) {
     return {
       boardDir: path.join(git.commonDir, NAME),
       repoRoot: local.top,
-      configRoot: mainWorktree(git.commonDir, local.top),
+      configRoot: configRootOf(local),
       projectName: repoName(git.commonDir),
       inGit: true,
       gitDir: local.gitDir,
