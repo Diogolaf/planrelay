@@ -4226,8 +4226,8 @@ export function buildTools(board, who) {
     },
     {
       name: 'claim_task',
-      description: 'Take a Ready task to work on. You can hold one task at a time. Returns the task with the latest handoff notes.',
-      inputSchema: obj({ id: ID }, ['id']),
+      description: 'Take a Ready task to work on. You can hold one task at a time. Returns the task with the latest handoff notes. takeOver: true continues a task held by an ended session — only when the human asked.',
+      inputSchema: obj({ id: ID, takeOver: { type: 'boolean' } }, ['id']),
       run: (a) => {
         const { state, result } = write(claimTask, a);
         const reg = readRegistry(board);
@@ -4548,7 +4548,7 @@ The board is the memory every agent session in this project shares. Each session
 | "move #9 to the backlog" / "prioritize #19" | `update_task` with `approved: false` / a lower `rank` |
 | "answer #14: …" | `get_task` 14, find the open question to the human, then `post_message` kind `answer`, `replyTo` its id, `relayedFromHuman: true` |
 | "#12 depends on #7" | `update_task` on 12 with `addDependsOn: [7]` |
-| "resume #9", "pick up #9" | `claim_task` 9 (it may belong to a session that ended) |
+| "resume #9", "pick up #9", "take over #9" | `claim_task` 9; if it belongs to a session that ended, pass `takeOver: true` (only because the human asked) |
 | "let's wrap up" | For your task: `complete_task`, or `release_task` with a handoff note |
 
 ## Customizing
@@ -4753,6 +4753,8 @@ Record anything unexpected as a task. Plan 3 runs the full acceptance script.
     - add a test showing that a session returning after `claimTimeoutHours` loses its claim at its first prompt and is pinged about it.
   - **Task 17:**
     - render `{ unchanged: true }` results honestly ("#21 is already approved; nothing changed.");
+    - `claim_task` accepts `takeOver`, and the reply names whose work was taken over;
+    - `relayedFromHuman` messages render as "relayed by <agent>";
     - touch only with the server's own pid and host;
     - never revive an ended agent;
     - run housekeeping through `before`;
