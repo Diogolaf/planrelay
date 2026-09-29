@@ -1831,9 +1831,11 @@ export function replay(board) {
       bad.push(i + 1); // parses, but is not an event (for example `null`)
       return;
     }
-    applyEvent(state, ev);
     const m = ev.type === 'message.posted' ? ev.data?.message : null;
-    if (m && Number.isSafeInteger(m.taskId) && Object.hasOwn(state.tasks, m.taskId)) { // only messages the reducer accepted
+    const target = m && Number.isSafeInteger(m.taskId) && Object.hasOwn(state.tasks, m.taskId) ? state.tasks[m.taskId] : null;
+    const countBefore = target ? target.messageCount : 0;
+    applyEvent(state, ev);
+    if (target && target.messageCount > countBefore) { // only messages the reducer accepted
       if (!messages.has(m.taskId)) messages.set(m.taskId, []);
       messages.get(m.taskId).push(m);
     }
