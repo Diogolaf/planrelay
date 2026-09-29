@@ -2588,6 +2588,7 @@ Expected: FAIL, module not found.
 import { nameOf, statusOf } from './agents.js';
 import { blockers, wouldCycle } from './derive.js';
 import { systemMessage } from './maintenance.js';
+import { FILES_LIMIT } from './reduce.js';
 import { redact } from './redact.js';
 
 /**
@@ -2990,7 +2991,7 @@ export function syncChecklist(ctx, items) {
   const clean = items
     .filter((i) => typeof i?.text === 'string' && i.text.trim())
     .slice(0, 50)
-    .map((i) => ({ text: redact(i.text.trim()).slice(0, 200), done: !!i.done }));
+    .map((i) => ({ text: redact(i.text.trim().slice(0, 1000)).slice(0, 200), done: !!i.done })); // cap before redacting: it runs under the board lock
   if (JSON.stringify(clean) === JSON.stringify(t.checklist)) return { events: [] };
   return { events: [{ type: 'task.checklist', actor: ctx.agentId, data: { id: t.id, items: clean } }] };
 }
@@ -2998,7 +2999,8 @@ export function syncChecklist(ctx, items) {
 /** Records the first touch of a file on the claimed task. */
 export function touchTaskFile(ctx, repoPath) {
   const t = claimedBy(ctx.state, ctx.agentId);
-  if (!t || t.files.some((f) => f.path === repoPath)) return { events: [] };
+  // Stop at the reducer's cap: past it, unique paths can no longer be told apart and the log would only grow.
+  if (!t || t.files.length >= FILES_LIMIT || t.files.some((f) => f.path === repoPath)) return { events: [] };
   return { events: [{ type: 'task.file', actor: ctx.agentId, data: { id: t.id, path: repoPath, by: ctx.agentId } }] };
 }
 ```
