@@ -1833,7 +1833,7 @@ export function replay(board) {
     }
     applyEvent(state, ev);
     const m = ev.type === 'message.posted' ? ev.data?.message : null;
-    if (m && Number.isSafeInteger(m.taskId)) {
+    if (m && Number.isSafeInteger(m.taskId) && Object.hasOwn(state.tasks, m.taskId)) { // only messages the reducer accepted
       if (!messages.has(m.taskId)) messages.set(m.taskId, []);
       messages.get(m.taskId).push(m);
     }
@@ -4680,6 +4680,27 @@ Record anything unexpected as a task. Plan 3 runs the full acceptance script.
   - `currentBranch` returns null for reftable repositories.
 
   The repository code supersedes the Task 4 listing. Hooks and the MCP server pass `projectDir: CLAUDE_PROJECT_DIR` and use `board.repoRoot` as the agent's folder.
+  - Later rounds added:
+    - one session, one board: resolution starts from `projectDir`;
+    - linked worktrees inside the project keep their own root and branch;
+    - a foreign-owned `.git` stops the search;
+    - `configRoot`, the main worktree;
+    - only explicit `.agentboard/` folders pull the non-git search upward.
+- **Task 5 (redaction) was rewritten after review**: linear-time rules, structure-preserving and idempotent assignments, broad vendor coverage, table-driven tests. The repository code supersedes the listing.
+- **Task 6 (config) was rewritten after review.** The API is now:
+  - `parseConfig(text)` returns `{ config, problems }`;
+  - `readConfig(root)` never throws;
+  - `loadConfig(root)` returns the config.
+
+  Other changes: BOM and UTF-16 input are accepted, the §7 ranges are clamped, and results are frozen. `readJson` strips a BOM. The repository code supersedes the listing.
+- **Task 7 (reducer) was hardened after review.** The changes:
+  - `isEvent` and the `taskAt` guard;
+  - an editable-field whitelist, and creation-field-only `task.created`;
+  - seq that only moves forward;
+  - `FILES_LIMIT`, and snippet-only `lastHandoff`;
+  - nothing stored as `undefined`.
+
+  The repository code supersedes the Task 7 listing. Task 9's `replay` uses `isEvent`, and Task 13's `touchTaskFile` uses `FILES_LIMIT`.
 - **Carried over to plan 3, before the first push:**
   - CI hardening:
     - verify the gitleaks download with a SHA-256 checksum;
