@@ -1,5 +1,5 @@
-import { nameOf, statusOf } from './agents.js';
-import { blockers, wouldCycle } from './derive.js';
+import { getAgent, nameOf, statusOf } from './agents.js';
+import { blockers } from './derive.js';
 import { systemMessage } from './maintenance.js';
 import { FILES_LIMIT } from './reduce.js';
 import { redact } from './redact.js';
@@ -27,58 +27,291 @@ function fail(message) {
   throw new BoardError(message);
 }
 
-function getTask(ctx, id) {
-  const t = Number.isSafeInteger(id) && Object.hasOwn(ctx.state.tasks, id) ? ctx.state.tasks[id] : undefined;
-  return t || fail(`#${id} does not exist.`);
+const TITLE_MAX = 200;
+const TEXT_MAX = 20_000;
+const LABEL_MAX = 40;
+const LABELS_MAX = 10;
+const LINK_TITLE_MAX = 200;
+const LINK_TARGET_MAX = 2000;
+const LINKS_MAX = 20;
+const DEPENDS_MAX = 50;
+/** Lists longer than this are refused before any entry is looked at, so a huge input costs nothing. */
+const RAW_LIST_MAX = 1000;
+/** Error messages quote at most this much of a bad value. */
+const ECHO_MAX = 40;
+/** The marker redact() puts in place of a secret. */
+const REDACTED = '[REDACTED]';
+
+const TOO_MANY_DEPENDS = `A task can depend on at most ${DEPENDS_MAX} tasks; group work under an epic instead.`;
+const TOO_MANY_LABELS = `A task can have at most ${LABELS_MAX} labels.`;
+const TOO_MANY_LINKS = `A task can have at most ${LINKS_MAX} links; keep the most useful ones.`;
+const EPIC_NO_DEPENDS = 'Epics cannot have dependencies; set dependsOn on the tasks inside it.';
+const LINK_HELP = 'use an http(s) URL or a path inside the repository, such as docs/plan.md';
+/** What update_task can change, in the order the "Nothing to update" message lists it. */
+const UPDATABLE = ['title', 'description', 'parent', 'labels', 'links', 'rank', 'addDependsOn', 'removeDependsOn', 'approved'];
+
+// ---------------------------------------------------------------------------------------------
+// Input normalization (§14). Every value an agent sends goes through these; the MCP layer passes
+// tool arguments straight through, so this is the only validator.
+// ---------------------------------------------------------------------------------------------
+
+/** One-line fields lose C0 and C1 controls (whitespace is collapsed instead), bidi controls and zero-width characters. */
+const ONE_LINE_DROP = /[\u0000-\u0008\u000e-\u001f\u007f-\u009f\u200b-\u200d\u202a-\u202e\u2066-\u2069\ufeff]/g;
+/** Multi-line fields keep newlines and tabs; every other control character goes. */
+const MULTI_LINE_DROP = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g;
+
+/** Lone surrogates become U+FFFD and invisible characters go; whitespace is kept. */
+const dropInvisible = (s) => s.toWellFormed().replace(ONE_LINE_DROP, '');
+const collapse = (s) => s.replace(/\s+/g, ' ').trim();
+
+/** An own field's value; null and undefined both mean "not provided" (§14). */
+const given = (obj, key) => (Object.hasOwn(obj, key) && obj[key] != null ? obj[key] : undefined);
+
+/** The tool input as an object of fields; missing input counts as no fields. */
+function fieldsOf(input) {
+  if (input == null) return {};
+  if (typeof input !== 'object' || Array.isArray(input)) fail('The input must be an object of named fields.');
+  return input;
 }
 
-function cleanText(value, field, { required = true, max = 20_000 } = {}) {
-  const s = typeof value === 'string' ? value.trim() : '';
-  if (required && !s) fail(`${field} is required.`);
-  if (s.length > max) fail(`${field} is too long (max ${max} characters).`);
-  return redact(s);
+/** A short, one-line, redacted rendering of a value for an error message: at most ECHO_MAX characters of it. */
+function echo(value) {
+  if (typeof value === 'string') {
+    const s = redact(collapse(dropInvisible(value.slice(0, 4 * ECHO_MAX))));
+    return JSON.stringify(s.length > ECHO_MAX ? `${s.slice(0, ECHO_MAX)}…` : s);
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value).slice(0, ECHO_MAX);
+  if (Array.isArray(value)) return 'a list';
+  if (value === null) return 'null';
+  return typeof value === 'object' ? 'an object' : typeof value;
 }
 
-function uniqueInts(value, field) {
-  if (!Array.isArray(value) || !value.every((v) => Number.isSafeInteger(v) && v >= 1)) fail(`${field} must be a list of task ids (whole numbers).`);
+/** " (got …)" for an error message about a bad value. */
+const got = (value) => ` (got ${echo(value)})`;
+
+/**
+ * Cuts a stored text down to `max` characters: never inside a surrogate pair or a [REDACTED] marker.
+ * Needed because a marker can be longer than the secret it replaced.
+ */
+function capAt(s, max) {
+  if (s.length <= max) return s;
+  let cut = s.slice(0, max);
+  if (/[\ud800-\udbff]$/.test(cut)) cut = cut.slice(0, -1);
+  const open = cut.lastIndexOf('[');
+  if (open >= 0 && cut.length - open < REDACTED.length && REDACTED.startsWith(cut.slice(open))) cut = cut.slice(0, open);
+  return cut.trimEnd();
+}
+
+/**
+ * A text value: must be a string when given; normalized; refused when empty and required or longer
+ * than `max` after normalization; then redacted and capped at `max`.
+ * One-line texts are redacted before whitespace is collapsed (a line end tells a `KEY: value` apart
+ * from prose) and again after (collapsing can join "Bearer" and its token).
+ * @returns {string | undefined} undefined when not given (or empty) and not required
+ */
+function readText(value, field, { max, oneLine, required }) {
+  if (value == null) return required ? fail(`${field} is required.`) : undefined;
+  if (typeof value !== 'string') fail(`${field} must be text${got(value)}.`);
+  const kept = oneLine ? dropInvisible(value) : value.toWellFormed().replace(/\r\n?/g, '\n').replace(MULTI_LINE_DROP, '');
+  const plain = oneLine ? collapse(kept) : kept.trim();
+  if (!plain) return required ? fail(`${field} is required.`) : '';
+  if (plain.length > max) fail(`${field} is too long (max ${max} characters).`);
+  return capAt(oneLine ? redact(collapse(redact(kept))) : redact(plain), max);
+}
+
+/** A multi-line text (description, message, summary, note), normalized and redacted; '' when absent and optional. */
+function cleanText(value, field, { required = true, max = TEXT_MAX } = {}) {
+  return readText(value, field, { max, required, oneLine: false }) ?? '';
+}
+
+/** A one-line text (title, link title), normalized and redacted. */
+function cleanLine(value, field, { required = true, max = TITLE_MAX } = {}) {
+  return readText(value, field, { max, required, oneLine: true }) ?? '';
+}
+
+/** true or false; undefined when not given. */
+function flag(value, field) {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'boolean') fail(`${field} must be true or false${got(value)}.`);
+  return value;
+}
+
+/** A task number: a whole number of 1 or more. Checked before any lookup. */
+function taskNumber(value, field) {
+  if (value == null) fail(`${field} is required: a task number such as 12.`);
+  if (!Number.isSafeInteger(value) || value < 1) {
+    const hint = typeof value === 'string' && /^\s*#?\d+\s*$/.test(value) ? ', written as a number without quotes or "#"' : '';
+    fail(`${field} must be a task number such as 12${hint}${got(value)}.`);
+  }
+  return value;
+}
+
+/** A list of task numbers, each once. `tooMany` is the error for a list longer than RAW_LIST_MAX. */
+function taskNumbers(value, field, tooMany) {
+  const help = `${field} must be a list of task numbers such as [3, 4]`;
+  if (!Array.isArray(value)) fail(`${help}${got(value)}.`);
+  if (value.length > RAW_LIST_MAX) fail(tooMany);
+  const bad = value.findIndex((v) => !Number.isSafeInteger(v) || v < 1);
+  if (bad >= 0) fail(`${help}${got(value[bad])}.`);
   return [...new Set(value)];
 }
 
+/**
+ * Labels (§14): one-line, NFC, redacted, then lower-cased (the patterns are case-sensitive; the
+ * marker keeps its case), each once; empty labels are dropped. Anything but text is an error.
+ */
 function cleanLabels(value) {
-  if (!Array.isArray(value)) fail('labels must be a list of strings.');
-  const out = [...new Set(value.filter((l) => typeof l === 'string').map((l) => l.trim().toLowerCase()).filter(Boolean))];
-  if (out.length > 10 || out.some((l) => l.length > 40)) fail('Use at most 10 labels of up to 40 characters.');
+  const help = 'labels must be a list of text, such as ["bug"]';
+  if (!Array.isArray(value)) fail(`${help}${got(value)}.`);
+  if (value.length > RAW_LIST_MAX) fail(TOO_MANY_LABELS);
+  const out = new Set();
+  for (const raw of value) {
+    if (typeof raw !== 'string') fail(`${help}${got(raw)}.`);
+    const kept = dropInvisible(raw).normalize('NFC');
+    const plain = collapse(kept);
+    if (!plain) continue;
+    if (plain.length > LABEL_MAX) fail(`Labels can be up to ${LABEL_MAX} characters long${got(plain)}.`);
+    const redacted = redact(collapse(redact(kept)));
+    const lower = redacted.split(REDACTED).map((part) => part.toLowerCase()).join(REDACTED).normalize('NFC');
+    out.add(capAt(lower, LABEL_MAX));
+  }
+  if (out.size > LABELS_MAX) fail(TOO_MANY_LABELS);
+  return [...out];
+}
+
+const SCHEME = /^([a-z][a-z\d+.-]*):/i;
+
+/**
+ * A link target (§4): an http(s) URL, or a path inside the repository (relative, no drive letter,
+ * no leading / or //, no .. that climbs out). Any other scheme (javascript:, data:, file:) is refused.
+ * Checked as stored, after redaction and capping: a redacted run can swallow a "/" and so change
+ * how far a path climbs.
+ */
+function linkTarget(value) {
+  const target = cleanLine(value, 'link target', { max: LINK_TARGET_MAX });
+  const scheme = SCHEME.exec(target)?.[1];
+  const slashed = target.replaceAll('\\', '/');
+  if (scheme?.length === 1) fail(`link target ${echo(target)} is an absolute path; ${LINK_HELP}.`);
+  if (scheme) {
+    const lower = scheme.toLowerCase();
+    if (lower !== 'http' && lower !== 'https') fail(`link target: "${lower.slice(0, ECHO_MAX)}:" links are not allowed; ${LINK_HELP}.`);
+    let url;
+    try {
+      url = new URL(target);
+    } catch {
+      fail(`link target ${echo(target)} is not a valid URL; ${LINK_HELP}.`);
+    }
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') fail(`link target: only http(s) URLs are allowed; ${LINK_HELP}.`);
+    return target;
+  }
+  if (slashed.startsWith('/')) fail(`link target ${echo(target)} is not a path inside the repository; ${LINK_HELP}.`);
+  let depth = 0;
+  for (const segment of slashed.split('/')) {
+    const s = segment.replace(/%2e/gi, '.');
+    if (s === '..') depth -= 1;
+    else if (s !== '' && s !== '.') depth += 1;
+    if (depth < 0) fail(`link target ${echo(target)} points outside the repository; ${LINK_HELP}.`);
+  }
+  return target;
+}
+
+/** Links: { title, target } objects, at most LINKS_MAX once exact duplicates are removed. */
+function cleanLinks(value) {
+  const help = 'links must be a list of { title, target }, such as [{ "title": "Plan", "target": "docs/plan.md" }]';
+  if (!Array.isArray(value)) fail(`${help}${got(value)}.`);
+  if (value.length > RAW_LIST_MAX) fail(TOO_MANY_LINKS);
+  const out = [];
+  const seen = new Set();
+  for (const link of value) {
+    if (link === null || typeof link !== 'object' || Array.isArray(link)) fail(`${help}${got(link)}.`);
+    const title = cleanLine(given(link, 'title'), 'link title', { max: LINK_TITLE_MAX });
+    const target = linkTarget(given(link, 'target'));
+    const key = JSON.stringify([title, target]);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ title, target });
+  }
+  if (out.length > LINKS_MAX) fail(TOO_MANY_LINKS);
   return out;
 }
 
-function cleanLinks(value) {
-  if (!Array.isArray(value)) fail('links must be a list of { title, target }.');
-  return value.slice(0, 20).map((l) => ({
-    title: cleanText(l?.title, 'link title', { max: 200 }),
-    target: cleanText(l?.target, 'link target', { max: 2000 }),
-  }));
+// ---------------------------------------------------------------------------------------------
+// Board rules
+// ---------------------------------------------------------------------------------------------
+
+/** The task with this number; the number's type is checked first (§16). */
+function getTask(ctx, value, field = 'id') {
+  const id = taskNumber(value, field);
+  return Object.hasOwn(ctx.state.tasks, id) ? ctx.state.tasks[id] : fail(`#${id} does not exist. list_tasks shows the task numbers.`);
 }
 
-function checkParent(ctx, parentId, kind, selfId) {
-  if (parentId == null) return null;
-  const p = getTask(ctx, parentId);
+/** The display name of the agent holding a task: the registry's current name, else the name stored with the claim. */
+function holderName(ctx, t) {
+  return getAgent(ctx.reg, t.assignee)?.name ?? t.assigneeName ?? nameOf(ctx.reg, t.assignee);
+}
+
+function checkParent(ctx, value, kind, selfId) {
+  const p = getTask(ctx, value, 'parent');
   if (p.id === selfId) fail('A task cannot be its own parent.');
-  if (p.kind !== 'epic') fail(`#${p.id} is not an epic.`);
+  if (p.kind !== 'epic') fail(`#${p.id} is not an epic; only epics contain tasks — use dependsOn for order.`);
   if (kind === 'epic') {
-    if (p.parent != null) fail(`#${p.id} is already a sub-epic; epics nest one level only.`);
+    if (p.parent != null) fail(`#${p.id} is a sub-epic, and epics nest one level only; choose a top-level epic as the parent.`);
     if (selfId != null && Object.values(ctx.state.tasks).some((t) => t.kind === 'epic' && t.parent === selfId)) {
-      fail(`#${selfId} has sub-epics, so it cannot become a sub-epic.`);
+      fail(`#${selfId} has sub-epics, so it cannot become a sub-epic; move its sub-epics out first.`);
     }
   }
   return p.id;
 }
 
 function checkDependency(ctx, selfId, depId) {
-  const dep = getTask(ctx, depId);
-  if (dep.kind === 'epic') fail(`#${depId} is an epic; dependencies link tasks only.`);
   if (depId === selfId) fail('A task cannot depend on itself.');
-  if (selfId != null && wouldCycle(ctx.state.tasks, selfId, depId)) fail(`#${selfId} → #${depId} would create a dependency cycle.`);
+  const dep = getTask(ctx, depId, 'dependsOn');
+  if (dep.kind === 'epic') fail(`#${depId} is an epic; depend on the tasks inside it instead.`);
 }
+
+/**
+ * A dependency path that leads from one of `starts` back to `selfId`, as [selfId, start, …, selfId],
+ * or null. One depth-first walk from all the new dependencies together, so every task and every
+ * dependency is visited at most once, however many dependencies are added.
+ */
+function cycleThrough(tasks, selfId, starts) {
+  /** @type {Map<number, number | null>} a visited task → the task whose dependency led to it */
+  const from = new Map();
+  const stack = [];
+  for (const s of starts) {
+    from.set(s, null);
+    stack.push(s);
+  }
+  while (stack.length) {
+    const id = /** @type {number} */ (stack.pop());
+    const t = Object.hasOwn(tasks, id) ? tasks[id] : undefined;
+    for (const d of t?.dependsOn ?? []) {
+      if (d === selfId) {
+        const chain = [];
+        for (let x = /** @type {number | null | undefined} */ (id); x != null; x = from.get(x)) chain.push(x);
+        return [selfId, ...chain.reverse(), selfId];
+      }
+      if (!from.has(d)) {
+        from.set(d, id);
+        stack.push(d);
+      }
+    }
+  }
+  return null;
+}
+
+/** "#2 → #1 → #2", with the middle of a long path left out. */
+function showPath(path) {
+  const ids = path.map((id) => `#${id}`);
+  return (ids.length > 8 ? [...ids.slice(0, 4), '…', ...ids.slice(-3)] : ids).join(' → ');
+}
+
+const sameList = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
+const sameLinks = (a, b) => a.length === b.length && a.every((l, i) => l.title === b[i].title && l.target === b[i].target);
+const sameSet = (a, b) => {
+  const set = new Set(b);
+  return a.length === set.size && a.every((v) => set.has(v));
+};
 
 /** Task ids mentioned as #N in a text, excluding the task itself and unknown ids. */
 export function mentionsIn(content, state, selfId) {
@@ -95,73 +328,135 @@ export function claimedBy(state, agentId) {
   return Object.values(state.tasks).find((t) => t.assignee === agentId && !t.done) ?? null;
 }
 
-function messageEvent(ctx, taskId, kind, content, extra = {}) {
+/**
+ * A message event by the acting agent, with its display name (§4). Callers must pass `content`
+ * already normalized and redacted (cleanText does both); it is stored as given. `extra` may set
+ * fields such as to, replyTo or relayedFromHuman, but never the task, author, name, kind, mentions or text.
+ * @param {Ctx} ctx @param {number} taskId @param {string} kind @param {string} content @param {Record<string, any>} [extra]
+ */
+export function messageEvent(ctx, taskId, kind, content, extra = {}) {
   return {
     type: 'message.posted',
     actor: ctx.agentId,
     data: {
       message: {
-        taskId, author: ctx.agentId, kind, to: null, replyTo: null, relayedFromHuman: false,
-        mentions: mentionsIn(content, ctx.state, taskId), text: content, ...extra,
+        to: null, replyTo: null, relayedFromHuman: false, ...extra,
+        taskId, author: ctx.agentId, authorName: getAgent(ctx.reg, ctx.agentId)?.name ?? null, kind,
+        mentions: mentionsIn(content, ctx.state, taskId), text: content,
       },
     },
   };
 }
 
-/** @param {Ctx} ctx */
+// ---------------------------------------------------------------------------------------------
+// Operations
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * create_task (§8). A task the human asked for is approved and records the agent that relayed it
+ * (requestedVia); an agent's suggestion waits in Backlog unless the config says
+ * agentTasksNeedApproval: false (anything else, including a missing config, needs approval).
+ * @param {Ctx} ctx
+ */
 export function createTask(ctx, input) {
-  const kind = input.kind ?? 'task';
-  if (kind !== 'task' && kind !== 'epic') fail('kind must be "task" or "epic".');
-  const title = cleanText(input.title, 'title', { max: 200 });
-  const description = cleanText(input.description ?? '', 'description', { required: false });
-  const parent = checkParent(ctx, input.parent ?? null, kind, null);
-  const dependsOn = uniqueInts(input.dependsOn ?? [], 'dependsOn');
-  if (kind === 'epic' && dependsOn.length) fail('Epics cannot have dependencies.');
-  for (const d of dependsOn) checkDependency(ctx, null, d);
-  const labels = cleanLabels(input.labels ?? []);
-  const byHuman = input.requestedByHuman === true;
+  const f = fieldsOf(input);
+  const kind = given(f, 'kind') ?? 'task';
+  if (kind !== 'task' && kind !== 'epic') fail(`kind must be "task" or "epic"${got(kind)}.`);
+  const title = cleanLine(given(f, 'title'), 'title', { max: TITLE_MAX });
+  const description = cleanText(given(f, 'description'), 'description', { required: false });
+  const parentIn = given(f, 'parent');
+  const parent = parentIn === undefined ? null : checkParent(ctx, parentIn, kind, null);
+  const dependsIn = given(f, 'dependsOn');
+  const dependsOn = dependsIn === undefined ? [] : taskNumbers(dependsIn, 'dependsOn', TOO_MANY_DEPENDS);
+  if (kind === 'epic' && dependsOn.length) fail(EPIC_NO_DEPENDS);
+  if (dependsOn.length > DEPENDS_MAX) fail(TOO_MANY_DEPENDS);
+  for (const d of dependsOn) checkDependency(ctx, null, d); // a new task has no dependents, so no cycle is possible
+  const labelsIn = given(f, 'labels');
+  const labels = labelsIn === undefined ? [] : cleanLabels(labelsIn);
+  const byHuman = flag(given(f, 'requestedByHuman'), 'requestedByHuman') ?? false;
   const id = ctx.state.nextId;
-  const approved = kind === 'epic' || byHuman || !ctx.cfg.agentTasksNeedApproval;
+  const approved = kind === 'epic' || byHuman || ctx.cfg?.agentTasksNeedApproval === false;
+  const name = getAgent(ctx.reg, ctx.agentId)?.name ?? null;
   const task = {
     id, kind, title, description, parent, labels, dependsOn,
-    origin: byHuman ? 'human' : 'agent', createdBy: byHuman ? 'human' : ctx.agentId, approved, rank: id,
+    origin: byHuman ? 'human' : 'agent',
+    createdBy: byHuman ? 'human' : ctx.agentId,
+    ...(byHuman ? { requestedVia: ctx.agentId, requestedViaName: name } : { createdByName: name }),
+    approved, rank: id,
   };
   return { events: [{ type: 'task.created', actor: ctx.agentId, data: { task } }], result: { id, approved } };
 }
 
-/** @param {Ctx} ctx */
+/**
+ * update_task (§8). Only fields that change are written; when nothing changes the result is
+ * { id, unchanged: true } and no event is emitted. null means "not provided", except for parent,
+ * where it detaches the task from its epic.
+ * @param {Ctx} ctx
+ */
 export function updateTask(ctx, input) {
-  const t = getTask(ctx, input.id);
+  const f = fieldsOf(input);
+  const t = getTask(ctx, given(f, 'id'));
+  const provided = (k) => (k === 'parent' ? Object.hasOwn(f, k) && f[k] !== undefined : given(f, k) !== undefined);
+  if (!UPDATABLE.some(provided)) fail(`Nothing to update. Give #${t.id} at least one of: ${UPDATABLE.join(', ')}.`);
   /** @type {Record<string, any>} */
   const changes = {};
-  if (input.title !== undefined) changes.title = cleanText(input.title, 'title', { max: 200 });
-  if (input.description !== undefined) changes.description = cleanText(input.description, 'description', { required: false });
-  if (input.parent !== undefined) changes.parent = checkParent(ctx, input.parent, t.kind, t.id);
-  if (input.labels !== undefined) changes.labels = cleanLabels(input.labels);
-  if (input.links !== undefined) changes.links = cleanLinks(input.links);
-  if (input.rank !== undefined) {
-    if (!Number.isFinite(input.rank)) fail('rank must be a number.');
-    changes.rank = input.rank;
+  const title = given(f, 'title');
+  if (title !== undefined) {
+    const v = cleanLine(title, 'title', { max: TITLE_MAX });
+    if (v !== t.title) changes.title = v;
   }
-  if (input.addDependsOn !== undefined || input.removeDependsOn !== undefined) {
-    if (t.kind === 'epic') fail('Epics cannot have dependencies.');
+  const description = given(f, 'description');
+  if (description !== undefined) {
+    const v = cleanText(description, 'description', { required: false });
+    if (v !== t.description) changes.description = v;
+  }
+  if (provided('parent')) {
+    const v = f.parent === null ? null : checkParent(ctx, f.parent, t.kind, t.id);
+    if (v !== t.parent) changes.parent = v;
+  }
+  const labels = given(f, 'labels');
+  if (labels !== undefined) {
+    const v = cleanLabels(labels);
+    if (!sameList(v, t.labels)) changes.labels = v;
+  }
+  const links = given(f, 'links');
+  if (links !== undefined) {
+    const v = cleanLinks(links);
+    if (!sameLinks(v, t.links)) changes.links = v;
+  }
+  const rank = given(f, 'rank');
+  if (rank !== undefined) {
+    if (typeof rank !== 'number' || !Number.isFinite(rank)) fail(`rank must be a number${got(rank)}.`);
+    if (rank !== t.rank) changes.rank = rank;
+  }
+  const addIn = given(f, 'addDependsOn');
+  const removeIn = given(f, 'removeDependsOn');
+  if (addIn !== undefined || removeIn !== undefined) {
+    const remove = removeIn === undefined ? [] : taskNumbers(removeIn, 'removeDependsOn', TOO_MANY_DEPENDS);
+    const add = addIn === undefined ? [] : taskNumbers(addIn, 'addDependsOn', TOO_MANY_DEPENDS);
+    if (t.kind === 'epic' && (add.length || remove.length)) fail(EPIC_NO_DEPENDS);
     const deps = new Set(t.dependsOn);
-    for (const d of uniqueInts(input.removeDependsOn ?? [], 'removeDependsOn')) deps.delete(d);
-    for (const d of uniqueInts(input.addDependsOn ?? [], 'addDependsOn')) {
-      if (!deps.has(d)) checkDependency(ctx, t.id, d);
-      deps.add(d);
-    }
-    changes.dependsOn = [...deps];
+    for (const d of remove) deps.delete(d);
+    const added = add.filter((d) => !deps.has(d));
+    if (added.length && deps.size + added.length > DEPENDS_MAX) fail(TOO_MANY_DEPENDS);
+    for (const d of added) checkDependency(ctx, t.id, d);
+    const cycle = added.length ? cycleThrough(ctx.state.tasks, t.id, added) : null;
+    if (cycle) fail(`#${t.id} cannot depend on #${cycle[1]}: that would close a dependency cycle (${showPath(cycle)}).`);
+    for (const d of added) deps.add(d);
+    if (!sameSet([...deps], t.dependsOn)) changes.dependsOn = [...deps];
   }
   const events = [];
   if (Object.keys(changes).length) events.push({ type: 'task.updated', actor: ctx.agentId, data: { id: t.id, changes } });
-  if (input.approved !== undefined) {
-    if (typeof input.approved !== 'boolean') fail('approved must be true or false.');
-    if (!input.approved && t.assignee) fail(`#${t.id} is claimed; release it first.`);
-    if (input.approved !== t.approved) {
-      events.push({ type: 'task.approved', actor: ctx.agentId, data: { id: t.id, approved: input.approved } });
+  const approved = flag(given(f, 'approved'), 'approved');
+  if (approved !== undefined && approved !== t.approved) {
+    if (t.kind === 'epic') fail('Epics are always approved; approve the tasks inside it.');
+    if (t.done) fail(`#${t.id} is done; its approval no longer changes.`);
+    if (!approved && t.assignee) {
+      fail(t.assignee === ctx.agentId
+        ? `You hold #${t.id}; release it before moving it back to Backlog.`
+        : `#${t.id} is claimed by ${holderName(ctx, t)}; ask them to release it first.`);
     }
+    events.push({ type: 'task.approved', actor: ctx.agentId, data: { id: t.id, approved } });
   }
-  if (!events.length) fail('Nothing to update.');
-  return { events, result: { id: t.id } };
+  return { events, result: events.length ? { id: t.id } : { id: t.id, unchanged: true } };
 }
