@@ -1827,8 +1827,8 @@ export function replay(board) {
       bad.push(i + 1);
       return;
     }
-    if (!isEvent(ev)) {
-      bad.push(i + 1); // parses, but is not an event (for example `null`)
+    if (!isEvent(ev) || ev.seq <= state.seq) {
+      bad.push(i + 1); // parses, but is not an event (for example `null`), or repeats an earlier seq
       return;
     }
     const m = ev.type === 'message.posted' ? ev.data?.message : null;
@@ -1924,8 +1924,12 @@ function lockedTransact(board, fn, opts) {
       ensureNewlineAtEnd(board.files.events);
       fs.appendFileSync(board.files.events, events.map((e) => JSON.stringify(e)).join('\n') + '\n');
       for (const e of events) {
+        // Same rule as replay: a message goes to its task file only if the reducer accepted it.
+        const m = e.type === 'message.posted' ? e.data.message : null;
+        const target = m && Object.hasOwn(state.tasks, m.taskId) ? state.tasks[m.taskId] : null;
+        const countBefore = target ? target.messageCount : 0;
         applyEvent(state, e);
-        if (e.type === 'message.posted') appendLine(messagesFile(board, e.data.message.taskId), JSON.stringify(e.data.message));
+        if (target && target.messageCount > countBefore) appendLine(messagesFile(board, m.taskId), JSON.stringify(m));
       }
       state.eventsSize = fileSize(board.files.events);
       writeJsonAtomic(board.files.state, state, { pretty: false });
