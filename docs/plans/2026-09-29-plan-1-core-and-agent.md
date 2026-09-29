@@ -4752,6 +4752,7 @@ Record anything unexpected as a task. Plan 3 runs the full acceptance script.
     - always return the registry;
     - add a test showing that a session returning after `claimTimeoutHours` loses its claim at its first prompt and is pinged about it.
   - **Task 17:**
+    - render `{ unchanged: true }` results honestly ("#21 is already approved; nothing changed.");
     - touch only with the server's own pid and host;
     - never revive an ended agent;
     - run housekeeping through `before`;
