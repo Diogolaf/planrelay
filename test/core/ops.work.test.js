@@ -190,7 +190,9 @@ test('a takeover names the former holder, is addressed to it, and never happens 
   // one claim per agent, even when the other task's holder is gone
   const busy = ctxWith({ tasks: [{ id: 1, title: 'Search screen', assignee: 'a1' }, { id: 2, assignee: 'a2' }] });
   endAgent(busy.reg, 'a2', busy.now);
-  refuses(() => claimTask(busy, { id: 2, takeOver: true }), /^You already hold #1 "Search screen"\. Complete or release it first\.$/);
+  refuses(() => claimTask(busy, { id: 2, takeOver: true }), /^You already hold #1\. Complete or release it first\.$/);
+  // the title is board text: it travels apart from the message, so the tools can fence it as data (§9)
+  assert.throws(() => claimTask(busy, { id: 2, takeOver: true }), (e) => e instanceof BoardError && e.data.join('\n') === '#1 Search screen');
 });
 
 test('only the holder completes; epics and done tasks are refused', () => {
@@ -490,4 +492,30 @@ test('refusals never show a registry name that is not usable text: the name stor
   refuses(() => claimTask(ctx, { id: 1 }), /^#1 is held by a session that has ended; pass takeOver: true only if the human asked you to continue it\.$/);
   const out = claimTask(ctx, { id: 1, takeOver: true });
   assert.equal(out.events[0].data.message.text, 'Amber took over from a session that had ended.');
+});
+
+test('update_task sets the whole checklist of the task the agent holds, cleaned like the mirror; nowhere else', () => {
+  const ctx = ctxWith({ tasks: [{ id: 1, assignee: 'a1' }, { id: 2 }, { id: 3, assignee: 'a2' }, { id: 4, assignee: 'a1', done: true }] });
+  const list = [{ text: ` Rotate\n the ${TOKEN} key `, done: true }, { text: ' ' }, { text: 'Ship', done: false }, { text: 'Docs', done: null }];
+  const out = apply(ctx, updateTask(ctx, { id: 1, checklist: list }));
+  assert.deepEqual(out.events.map((e) => e.type), ['task.checklist']);
+  const stored = [{ text: 'Rotate the [REDACTED] key', done: true }, { text: 'Ship', done: false }, { text: 'Docs', done: false }];
+  assert.deepEqual(ctx.state.tasks[1].checklist, stored);
+  assert.deepEqual(updateTask(ctx, { id: 1, checklist: stored }), { events: [], result: { id: 1, unchanged: true } });
+  // with other fields, in one update; an empty list clears it
+  const both = apply(ctx, updateTask(ctx, { id: 1, title: 'Rotate keys', checklist: [] }));
+  assert.deepEqual(both.events.map((e) => e.type), ['task.updated', 'task.checklist']);
+  assert.deepEqual(ctx.state.tasks[1].checklist, []);
+  // only the holder, only while it is not done
+  refuses(() => updateTask(ctx, { id: 2, checklist: [] }), /^The checklist can only be set on the task you hold \(#1\); #2 is not yours\.$/);
+  refuses(() => updateTask(ctx, { id: 3, checklist: [] }), /; #3 is not yours\.$/);
+  refuses(() => updateTask(ctx, { id: 4, checklist: [] }), /^#4 is done; its checklist no longer changes\.$/);
+  const free = ctxWith({ tasks: [{ id: 1 }] });
+  refuses(() => updateTask(free, { id: 1, checklist: [] }), /^The checklist can only be set on the task you hold; #1 is not yours\. Claim it first if you work on it\.$/);
+  // a tool call is checked strictly, unlike the hooks' mirror
+  refuses(() => updateTask(ctx, { id: 1, checklist: 'Model, API' }), /^checklist must be a list of \{ text, done \}/);
+  refuses(() => updateTask(ctx, { id: 1, checklist: [null] }), /^checklist must be a list of \{ text, done \}.* \(got null\)\.$/);
+  refuses(() => updateTask(ctx, { id: 1, checklist: [{ text: 5 }] }), /^A checklist item's text must be text \(got 5\)\.$/);
+  refuses(() => updateTask(ctx, { id: 1, checklist: [{ text: 'A', done: 'yes' }] }), /^A checklist item's done must be true or false \(got "yes"\)\.$/);
+  refuses(() => updateTask(ctx, { id: 1, checklist: Array.from({ length: 51 }, (_, i) => ({ text: `Step ${i}` })) }), /^A checklist can have at most 50 items\.$/);
 });

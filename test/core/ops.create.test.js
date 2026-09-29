@@ -78,7 +78,7 @@ test('nothing to update, and moving a claimed task to Backlog, are refused', () 
   const ctx = ctxWith({ tasks: [{ id: 1, assignee: 'a2' }, { id: 2, assignee: 'a1' }, { id: 3, assignee: 'gone-agent', assigneeName: 'Cobalt' }] });
   assert.throws(
     () => updateTask(ctx, { id: 1 }),
-    /^BoardError: Nothing to update\. Give #1 at least one of: title, description, parent, labels, links, rank, addDependsOn, removeDependsOn, approved\.$/,
+    /^BoardError: Nothing to update\. Give #1 at least one of: title, description, parent, labels, links, rank, addDependsOn, removeDependsOn, approved, checklist\.$/,
   );
   assert.throws(() => updateTask(ctx, { id: 1, title: null, labels: undefined }), /Nothing to update/); // null means "not provided"
   assert.throws(() => updateTask(ctx, { id: 1, approved: false }), /^BoardError: #1 is claimed by Jade; ask them to release it first\.$/);

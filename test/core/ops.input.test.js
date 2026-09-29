@@ -233,7 +233,7 @@ test('unknown fields are refused, listing the allowed ones', () => {
   refuses(() => createTask(ctx, { title: 'T', links: [] }), /^Unknown field "links"; allowed: /);
   refuses(
     () => updateTask(ctx, { id: 1, tittle: 'x' }),
-    /^Unknown field "tittle"; allowed: id, title, description, parent, labels, links, rank, addDependsOn, removeDependsOn, approved\.$/,
+    /^Unknown field "tittle"; allowed: id, title, description, parent, labels, links, rank, addDependsOn, removeDependsOn, approved, checklist\.$/,
   );
   refuses(() => updateTask(ctx, { id: 1, tittle: 'x', rank: 3 }), /^Unknown field "tittle"/); // nothing is half-applied
   refuses(() => updateTask(ctx, { id: 1, tittle: null }), /^Unknown field "tittle"/); // null or not, a typo is a typo

@@ -14,17 +14,23 @@ import { redact } from './redact.js';
  * }} Ctx
  */
 
-/** An error whose message is meant for the agent (§16). */
+/**
+ * An error whose message is meant for the agent (§16). Board text it refers to, such as a task's
+ * title, is kept apart in `data` (lines), never in the message, so whoever shows the error can fence
+ * it as data (§9).
+ */
 export class BoardError extends Error {
-  constructor(message) {
+  /** @param {string} message @param {string[]} [data] */
+  constructor(message, data = []) {
     super(message);
     this.name = 'BoardError';
+    this.data = data;
   }
 }
 
 /** @returns {never} */
-function fail(message) {
-  throw new BoardError(message);
+function fail(message, data = []) {
+  throw new BoardError(message, data);
 }
 
 const TITLE_MAX = 200;
@@ -48,7 +54,7 @@ const TOO_MANY_LINKS = `A task can have at most ${LINKS_MAX} links; keep the mos
 const EPIC_NO_DEPENDS = 'Epics cannot have dependencies; set dependsOn on the tasks inside it.';
 const LINK_HELP = 'use an http(s) URL or a path inside the repository, such as docs/plan.md';
 /** What update_task can change, in the order the "Nothing to update" message lists it. */
-const UPDATABLE = ['title', 'description', 'parent', 'labels', 'links', 'rank', 'addDependsOn', 'removeDependsOn', 'approved'];
+const UPDATABLE = ['title', 'description', 'parent', 'labels', 'links', 'rank', 'addDependsOn', 'removeDependsOn', 'approved', 'checklist'];
 /** The fields each tool takes (§8); anything else is refused, so a typo is never silently ignored (§14). */
 const FIELDS = {
   create: ['title', 'description', 'kind', 'parent', 'dependsOn', 'labels', 'requestedByHuman'],
@@ -450,7 +456,8 @@ export function createTask(ctx, input) {
 /**
  * update_task (§8). Only fields that change are written; when nothing changes the result is
  * { id, unchanged: true } and no event is emitted. null means "not provided", except for parent,
- * where it detaches the task from its epic.
+ * where it detaches the task from its epic. `checklist` replaces the whole list, and only on the
+ * task the agent holds (checklistInput).
  * @param {Ctx} ctx
  */
 export function updateTask(ctx, input) {
@@ -506,8 +513,23 @@ export function updateTask(ctx, input) {
     for (const d of added) deps.add(d);
     if (!sameSet([...deps], t.dependsOn)) changes.dependsOn = [...deps];
   }
+  const checklistIn = given(f, 'checklist');
+  /** @type {{ text: string, done: boolean }[] | null} */
+  let checklist = null;
+  if (checklistIn !== undefined) {
+    const v = checklistInput(checklistIn);
+    if (t.done) fail(`#${t.id} is done; its checklist no longer changes.`);
+    if (t.assignee !== ctx.agentId) {
+      const held = claimedBy(ctx.state, ctx.agentId);
+      fail(held
+        ? `The checklist can only be set on the task you hold (#${held.id}); #${t.id} is not yours.`
+        : `The checklist can only be set on the task you hold; #${t.id} is not yours. Claim it first if you work on it.`);
+    }
+    if (!sameChecklist(v, t.checklist)) checklist = v;
+  }
   const events = [];
   if (Object.keys(changes).length) events.push({ type: 'task.updated', actor: ctx.agentId, data: { id: t.id, changes } });
+  if (checklist) events.push({ type: 'task.checklist', actor: ctx.agentId, data: { id: t.id, items: checklist } });
   const approved = flag(given(f, 'approved'), 'approved');
   if (approved !== undefined && approved !== t.approved) {
     if (t.kind === 'epic') fail('Epics are always approved; approve the tasks inside it.');
@@ -601,7 +623,7 @@ export function claimTask(ctx, input) {
   if (t.done) fail(`#${t.id} is already done; pick a Ready task instead.`);
   if (t.assignee && t.assignee === ctx.agentId) return { events: [], result: { id: t.id } };
   const held = claimedBy(ctx.state, ctx.agentId);
-  if (held) fail(`You already hold #${held.id} "${held.title}". Complete or release it first.`);
+  if (held) fail(`You already hold #${held.id}. Complete or release it first.`, [`#${held.id} ${held.title}`]);
   if (liveOwner(ctx, t)) fail(`#${t.id} is claimed by ${liveHolderName(ctx, t)}. Ask them on the board or pick another task.`);
   const former = t.assignee ? { id: t.assignee, name: holderName(ctx, t), folder: claimFolder(t) } : null;
   if (former && !takeOver) {
@@ -810,6 +832,42 @@ function checklistText(value) {
 }
 
 /**
+ * A checklist as stored: each item's text cleaned (checklistText), items without text skipped, done
+ * only when `done` is exactly true, at most CHECKLIST_MAX items. Never throws.
+ * @param {unknown[]} items @returns {{ text: string, done: boolean }[]}
+ */
+function checklistOf(items) {
+  const clean = [];
+  for (const item of items.slice(0, RAW_LIST_MAX)) {
+    if (clean.length === CHECKLIST_MAX) break;
+    const text = typeof item?.text === 'string' ? checklistText(item.text) : '';
+    if (text) clean.push({ text, done: item.done === true });
+  }
+  return clean;
+}
+
+const sameChecklist = (a, b) => a.length === b.length && a.every((i, n) => i.text === b[n].text && i.done === b[n].done);
+
+/**
+ * update_task's `checklist` (§8): the whole list, checked strictly, since it comes from a tool call
+ * (§14): a list of at most CHECKLIST_MAX { text, done } objects, text as text, done true or false
+ * or left out. Then cleaned like the hooks' mirror (checklistOf).
+ */
+function checklistInput(value) {
+  const help = 'checklist must be a list of { text, done }, such as [{ "text": "Write the tests", "done": false }]';
+  if (!Array.isArray(value)) fail(`${help}${got(value)}.`);
+  if (value.length > CHECKLIST_MAX) fail(`A checklist can have at most ${CHECKLIST_MAX} items.`);
+  for (const item of value) {
+    if (item === null || typeof item !== 'object' || Array.isArray(item)) fail(`${help}${got(item)}.`);
+    const text = Object.hasOwn(item, 'text') ? item.text : undefined;
+    if (typeof text !== 'string') fail(`A checklist item's text must be text${got(text)}.`);
+    const done = given(item, 'done');
+    if (done !== undefined && typeof done !== 'boolean') fail(`A checklist item's done must be true or false${got(done)}.`);
+  }
+  return checklistOf(value);
+}
+
+/**
  * Mirrors the agent's todo list into its claimed task (§9). Called by a hook, so bad input never
  * throws: items without text are skipped, an item is done only when `done` is exactly true, and
  * anything but a list changes nothing. At most CHECKLIST_MAX items; no event when nothing changes.
@@ -818,14 +876,8 @@ function checklistText(value) {
 export function syncChecklist(ctx, items) {
   const t = claimedBy(ctx.state, ctx.agentId);
   if (!t || !Array.isArray(items) || !liveActor(ctx)) return { events: [] };
-  const clean = [];
-  for (const item of items.slice(0, RAW_LIST_MAX)) {
-    if (clean.length === CHECKLIST_MAX) break;
-    const text = typeof item?.text === 'string' ? checklistText(item.text) : '';
-    if (text) clean.push({ text, done: item.done === true });
-  }
-  const same = clean.length === t.checklist.length && clean.every((i, n) => i.text === t.checklist[n].text && i.done === t.checklist[n].done);
-  if (same) return { events: [] };
+  const clean = checklistOf(items);
+  if (sameChecklist(clean, t.checklist)) return { events: [] };
   return { events: [{ type: 'task.checklist', actor: ctx.agentId, data: { id: t.id, items: clean } }] };
 }
 
