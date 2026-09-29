@@ -41,6 +41,8 @@ export function getAgent(reg, id) {
   return typeof id === 'string' && id !== '' && Object.hasOwn(reg.agents, id) ? reg.agents[id] : undefined;
 }
 
+/** A board sequence number: a whole number of 0 or more. */
+const isSeq = (v) => Number.isSafeInteger(v) && v >= 0;
 /** An agent is live until it has an end time (0 counts as one). */
 const isLive = (a) => a.endedAt == null;
 /** A time used for "most recent" comparisons: never later than now (clock skew), -Infinity when unusable. */
@@ -114,7 +116,8 @@ function pickName(reg, folder, now, selfId) {
  * - Fields left out (or null for folder, pid and host) keep their stored value.
  * - A new agent's cursor starts at info.seq, the board's current sequence number (0 when it is not
  *   a whole number of 0 or more), so it is never pinged about older messages. A touch never moves
- *   an existing agent's cursor: one that comes back is shown what it missed.
+ *   a usable cursor: an agent that comes back is shown what it missed. An existing agent without a
+ *   usable cursor (missing, or dropped by the registry reader) gets info.seq when that is usable.
  * @param {Registry} reg
  * @param {{ id: string, folder?: string | null, pid?: number | null, host?: string | null, branch?: string | null,
  *   seq?: number }} info
@@ -134,7 +137,7 @@ export function touchAgent(reg, info, now) {
     const [name, color] = pickName(reg, info.folder, now, id);
     a = {
       id, name, color, folder: info.folder ?? null, pid: info.pid ?? null, host: info.host ?? null, branch: info.branch ?? null,
-      firstSeen: now, lastSeen: now, cursor: Number.isSafeInteger(info.seq) && info.seq >= 0 ? info.seq : 0, endedAt: null,
+      firstSeen: now, lastSeen: now, cursor: isSeq(info.seq) ? info.seq : 0, endedAt: null,
     };
     // defineProperty: plain assignment with the id "__proto__" would change the prototype, not add an entry
     Object.defineProperty(reg.agents, id, { value: a, writable: true, enumerable: true, configurable: true });
@@ -143,6 +146,7 @@ export function touchAgent(reg, info, now) {
     const taken = Object.entries(reg.agents).some(([otherId, other]) => otherId !== id && isLive(other) && other.name === a.name);
     if (taken) [a.name, a.color] = pickName(reg, null, now, id);
   }
+  if (!isSeq(a.cursor) && isSeq(info.seq)) a.cursor = info.seq;
   a.lastSeen = now;
   a.endedAt = null;
   if (info.folder) a.folder = info.folder;

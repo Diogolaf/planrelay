@@ -317,6 +317,15 @@ test('whatsNew needs an agent id; a bad afterSeq means 0, and a since that is no
   assert.deepEqual(reasons({ since: T0 + 1 }), []);
 });
 
+test('a cursor ahead of the board counts as 0: the board was reset under it, so the agent sees the ring once', () => {
+  const ctx = ctxWith({ tasks: [{ id: 1, title: 'Vegetarian filter', assignee: 'a1' }] });
+  apply(ctx, postMessage({ ...ctx, agentId: 'a2' }, { taskId: 1, text: 'The recipe model is merged.' }));
+  const texts = (afterSeq) => whatsNew(ctx.state, ctx.reg, 'a1', { afterSeq }).map((i) => i.message.text);
+  assert.deepEqual(texts(ctx.state.seq), []);
+  assert.deepEqual(texts(ctx.state.seq + 1), ['The recipe model is merged.']);
+  assert.deepEqual(texts(Number.MAX_SAFE_INTEGER), ['The recipe model is merged.']);
+});
+
 test('the stalled countdown ends exactly when housekeeping releases the claim', () => {
   const ctx = ctxWith({ tasks: [{ id: 4, title: 'Cache photos', assignee: 'a2', claim: { folder: '/w/b', since: T0 } }] });
   ctx.reg.activity[4] = T0 + 2 * HOUR; // an edit on the task, recorded by the hook

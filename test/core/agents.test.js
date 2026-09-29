@@ -104,6 +104,23 @@ test('a new agent starts its cursor at the board sequence number it is given; a 
   assert.deepEqual([a.endedAt, a.cursor, a.prevCursor], [null, 42, 40]);
 });
 
+test('a touch gives an existing agent without a usable cursor the sequence number it is given', () => {
+  const reg = emptyRegistry();
+  const a = touchAgent(reg, { id: 's1', seq: 5 }, T0);
+  delete a.cursor; // as the registry reader leaves an agent whose cursor was unusable
+  touchAgent(reg, { id: 's1', seq: 'soon' }, T0 + MIN); // nothing usable to set
+  assert.equal(Object.hasOwn(a, 'cursor'), false);
+  touchAgent(reg, { id: 's1', seq: 30 }, T0 + 2 * MIN);
+  assert.equal(a.cursor, 30);
+  touchAgent(reg, { id: 's1', seq: 31 }, T0 + 3 * MIN); // a usable cursor never moves
+  assert.equal(a.cursor, 30);
+  for (const bad of [-1, 2.5, '7', null]) {
+    a.cursor = bad;
+    touchAgent(reg, { id: 's1', seq: 40 }, T0 + 4 * MIN);
+    assert.equal(a.cursor, 40, String(bad));
+  }
+});
+
 test('an agent that comes back is renamed when a live agent took its name meanwhile', () => {
   const reg = emptyRegistry();
   touchAgent(reg, { id: 's1', folder: '/w/a' }, T0);

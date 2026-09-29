@@ -211,8 +211,9 @@ export function getTask(state, reg, id, messages = []) {
  * - Its own messages never count, nor do system notes on its task addressed to another agent,
  *   which are for that agent alone (the note to the former holder when this agent took over).
  * - An agentId that is not a non-empty string gets nothing. An afterSeq that is not a whole number
- *   of 0 or more means 0; a since that is not a finite number filters nothing; options that are
- *   not an object count as none. Nothing is ever coerced to a number.
+ *   of 0 or more means 0, and so does one ahead of the board (state.seq): the board was reset under
+ *   the cursor, so the agent sees the ring once. A since that is not a finite number filters
+ *   nothing; options that are not an object count as none. Nothing is ever coerced to a number.
  * @param {BoardState} state
  * @param {Registry} reg
  * @param {unknown} agentId
@@ -223,7 +224,7 @@ export function whatsNew(state, reg, agentId, options = {}) {
   if (typeof agentId !== 'string' || agentId === '') return [];
   const o = isObj(options) ? options : {};
   const seqIn = given(o, 'afterSeq');
-  const afterSeq = Number.isSafeInteger(seqIn) && seqIn >= 0 ? seqIn : 0;
+  const afterSeq = Number.isSafeInteger(seqIn) && seqIn >= 0 && seqIn <= state.seq ? seqIn : 0;
   const sinceIn = given(o, 'since');
   const since = Number.isFinite(sinceIn) ? sinceIn : null;
   const mine = claimedBy(state, agentId);
