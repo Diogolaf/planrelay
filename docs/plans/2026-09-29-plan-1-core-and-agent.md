@@ -415,9 +415,39 @@ jobs:
         run: node scripts/check-denylist.mjs --all
 ```
 
+- [ ] **Step 7b: Ignore local files that tend to carry personal paths, and pin the package name**
+
+Append to `.gitignore`:
+```
+# Local tool and agent files often contain absolute home paths
+.claude/settings.local.json
+CLAUDE.local.md
+*.log
+.env
+.env.*
+# npm pack output (checked in CI, never committed)
+*.tgz
+```
+
+Add to `test/name.test.js`:
+```js
+import fs from 'node:fs';
+
+test('package metadata uses the same name', () => {
+  const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+  assert.equal(pkg.name, NAME);
+  assert.deepEqual(Object.keys(pkg.bin), [NAME]);
+});
+```
+(Put the `fs` import with the other imports at the top of the file.)
+
+Run: `npm test`
+Expected: PASS
+
 - [ ] **Step 8: Commit through the guard**
 
 ```bash
+git add .gitignore test/name.test.js
 git add scripts/check-denylist.mjs .githooks/pre-commit .github/workflows/ci.yml test/scripts/check-denylist.test.js
 git update-index --chmod=+x .githooks/pre-commit
 git commit -m "chore: add leak guard (denylist, identity check, gitleaks, CI)"
