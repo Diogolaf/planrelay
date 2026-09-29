@@ -72,11 +72,25 @@ const REGISTRY_ENTRY = {
   touches: (key, v) => isPlainObj(v),
 };
 
+/** Agent fields that hold a board sequence number (agents.js Agent): a whole number of 0 or more. */
+const SEQ_FIELDS = ['cursor', 'prevCursor'];
+
+/** A kept agent, copied, without a cursor or prevCursor that is not a sequence number. */
+function cleanAgent(a) {
+  const out = { ...a }; // spread defines own properties, so a "__proto__" key stays an ordinary one
+  for (const k of SEQ_FIELDS) if (Object.hasOwn(out, k) && !(Number.isSafeInteger(out[k]) && out[k] >= 0)) delete out[k];
+  return out;
+}
+
+/** How kept entries are cleaned, per part. */
+const REGISTRY_CLEAN = { agents: cleanAgent };
+
 /**
  * The saved registry. A missing, corrupt or misshapen part reads as empty, and malformed entries
  * are dropped (an agent or touch that is not an object, an activity time that is not a number, an
- * agent with an empty id), so one bad entry can never make every write throw. Other top-level
- * keys are kept. @param {Board} board @returns {Registry}
+ * agent with an empty id), so one bad entry can never make every write throw. An agent's cursor or
+ * prevCursor that is not a sequence number is dropped, and the agent kept. Other top-level keys
+ * are kept. @param {Board} board @returns {Registry}
  */
 export function readRegistry(board) {
   const r = readJson(board.files.agents, null);
@@ -84,7 +98,8 @@ export function readRegistry(board) {
   const reg = { ...r };
   for (const [part, keep] of Object.entries(REGISTRY_ENTRY)) {
     // fromEntries defines own properties, so a "__proto__" key can never replace the prototype.
-    reg[part] = isObj(r[part]) ? Object.fromEntries(Object.entries(r[part]).filter(([k, v]) => keep(k, v))) : {};
+    const clean = REGISTRY_CLEAN[part] ?? ((v) => v);
+    reg[part] = isObj(r[part]) ? Object.fromEntries(Object.entries(r[part]).filter(([k, v]) => keep(k, v)).map(([k, v]) => [k, clean(v)])) : {};
   }
   return /** @type {Registry} */ (reg);
 }

@@ -201,27 +201,36 @@ export function getTask(state, reg, id, messages = []) {
 /** @typedef {{ reason: 'answer' | 'question' | 'update' | 'unblocked' | 'mention', message: MessageHeader, authorName: string }} Ping */
 
 /**
- * Updates for one agent after `since` (§9), oldest first: answers to its questions, questions to
- * it, other messages addressed to it (such as "Released Amber's claim …" after the task left it),
- * news on the task it holds, and mentions of that task.
+ * Updates for one agent (§9), oldest first: answers to its questions, questions to it, other
+ * messages addressed to it (such as "Released Amber's claim …" after the task left it), news on the
+ * task it holds, and mentions of that task.
+ * - Only messages committed after `afterSeq`, the agent's cursor: a board sequence number, never a
+ *   time (§5 Agent), because a writer stamps its message before it gets the lock, so times can go
+ *   backwards in commit order. When `since` is a finite number, only messages stamped at or after
+ *   it as well: a filter, which never stands in for the cursor.
  * - Its own messages never count, nor do system notes on its task addressed to another agent,
  *   which are for that agent alone (the note to the former holder when this agent took over).
- * - An agentId that is not a non-empty string gets nothing; a `since` that is not a number (or
- *   NaN) means from the start of the message ring.
+ * - An agentId that is not a non-empty string gets nothing. An afterSeq that is not a whole number
+ *   of 0 or more means 0; a since that is not a finite number filters nothing; options that are
+ *   not an object count as none. Nothing is ever coerced to a number.
  * @param {BoardState} state
  * @param {Registry} reg
  * @param {unknown} agentId
- * @param {unknown} since Unix time in ms: only messages after it count
+ * @param {unknown} [options] { afterSeq?: number, since?: number } since: a Unix time in ms
  * @returns {Ping[]}
  */
-export function whatsNew(state, reg, agentId, since) {
+export function whatsNew(state, reg, agentId, options = {}) {
   if (typeof agentId !== 'string' || agentId === '') return [];
-  const from = typeof since === 'number' && !Number.isNaN(since) ? since : -Infinity; // never coerces an object
+  const o = isObj(options) ? options : {};
+  const seqIn = given(o, 'afterSeq');
+  const afterSeq = Number.isSafeInteger(seqIn) && seqIn >= 0 ? seqIn : 0;
+  const sinceIn = given(o, 'since');
+  const since = Number.isFinite(sinceIn) ? sinceIn : null;
   const mine = claimedBy(state, agentId);
   /** @type {Ping[]} */
   const items = [];
   for (const m of state.messages) {
-    if (m.at <= from || m.author === agentId) continue;
+    if (!(m.seq > afterSeq) || (since !== null && !(m.at >= since)) || m.author === agentId) continue;
     /** @type {Ping['reason'] | null} */
     let reason = null;
     if (m.kind === 'answer' && m.replyToAuthor === agentId) reason = 'answer';

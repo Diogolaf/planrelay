@@ -7,6 +7,7 @@ import {
   openBoard, transact, readState, readMessages, readRegistry, repair, replay, messagesFile,
 } from '../../src/core/store.js';
 import { samePath } from '../../src/core/paths.js';
+import { SCHEMA } from '../../src/core/reduce.js';
 import { tempRepo, T0 } from '../helpers.js';
 
 const createEv = (id, title = `Task ${id}`) => ({
@@ -86,11 +87,27 @@ test('an unreadable or misshapen snapshot is rebuilt from the log', () => {
   const b = openBoard(tempRepo());
   transact(b, () => ({ events: [createEv(1)] }));
   const size = fs.statSync(b.files.events).size;
-  fs.writeFileSync(b.files.state, JSON.stringify({ schema: 1, seq: 1, nextId: 2, eventsSize: size, tasks: null, recent: [], messages: [] }));
+  fs.writeFileSync(b.files.state, JSON.stringify({ schema: SCHEMA, seq: 1, nextId: 2, eventsSize: size, tasks: null, recent: [], messages: [] }));
   assert.equal(readState(b).tasks[1].title, 'Task 1');
   fs.rmSync(b.files.state);
   fs.mkdirSync(b.files.state); // a folder where the snapshot should be
   assert.equal(readState(b).tasks[1].title, 'Task 1');
+});
+
+test('a snapshot of an older schema is not trusted: readers replay the log, and the next write saves the current shape', () => {
+  const b = openBoard(tempRepo());
+  transact(b, () => ({ events: [createEv(1), post(1, 'Started on the filter.')] }));
+  const snap = JSON.parse(fs.readFileSync(b.files.state, 'utf8'));
+  assert.equal(snap.schema, SCHEMA);
+  // as schema 1 saved it: message ring entries without their seq; it matches the log otherwise
+  const old = { ...snap, schema: 1, messages: snap.messages.map(({ seq, ...m }) => m) };
+  assert.equal(old.eventsSize, fs.statSync(b.files.events).size);
+  fs.writeFileSync(b.files.state, JSON.stringify(old));
+  assert.deepEqual(readState(b).messages.map((m) => m.seq), [2]);
+  transact(b, () => ({ events: [post(1, 'Next: the screen.')] }));
+  const saved = JSON.parse(fs.readFileSync(b.files.state, 'utf8'));
+  assert.equal(saved.schema, SCHEMA);
+  assert.deepEqual(saved.messages.map((m) => m.seq), [2, 3]);
 });
 
 test('malformed and partial lines are skipped, and later appends stay intact', () => {
@@ -386,6 +403,31 @@ test('malformed registry entries are dropped, so one bad entry cannot make every
   const reg = readRegistry(b);
   assert.equal(Object.getPrototypeOf(reg.agents), Object.prototype);
   assert.ok(Object.hasOwn(reg.agents, '__proto__'));
+});
+
+test('agent cursors are board sequence numbers: an unusable cursor or prevCursor is dropped, the agent kept', () => {
+  const b = openBoard(tempRepo());
+  fs.mkdirSync(b.dir, { recursive: true });
+  fs.writeFileSync(b.files.agents, JSON.stringify({
+    agents: {
+      a1: { id: 'a1', name: 'Amber', cursor: 12, prevCursor: 0 },
+      a2: { id: 'a2', name: 'Jade', cursor: -1, prevCursor: 2.5 },
+      a3: { id: 'a3', cursor: '12', prevCursor: null },
+      a4: { id: 'a4', cursor: 1e300, prevCursor: { seq: 3 } },
+      a5: { id: 'a5' },
+    },
+  }));
+  const clean = {
+    a1: { id: 'a1', name: 'Amber', cursor: 12, prevCursor: 0 }, a2: { id: 'a2', name: 'Jade' }, a3: { id: 'a3' }, a4: { id: 'a4' }, a5: { id: 'a5' },
+  };
+  assert.deepEqual(readRegistry(b).agents, clean);
+  transact(b, (s, reg) => ({ registry: reg }));
+  assert.deepEqual(JSON.parse(fs.readFileSync(b.files.agents, 'utf8')).agents, clean);
+  // an agent object holding a "__proto__" key stays an ordinary object
+  fs.writeFileSync(b.files.agents, '{"agents":{"a1":{"id":"a1","cursor":-5,"__proto__":{"cursor":7}}}}');
+  const a1 = readRegistry(b).agents.a1;
+  assert.equal(Object.getPrototypeOf(a1), Object.prototype);
+  assert.deepEqual([Object.hasOwn(a1, 'cursor'), a1.cursor], [false, undefined]);
 });
 
 test('housekeeping (before) runs first: fn sees its effects, and both are written as one batch', () => {

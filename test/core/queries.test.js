@@ -6,7 +6,7 @@ import { maintenance } from '../../src/core/maintenance.js';
 import { BoardError, claimTask, completeTask, createTask, postMessage, releaseTask } from '../../src/core/ops.js';
 import { boardCounts, listTasks, getTask, whatsNew, needsHuman } from '../../src/core/queries.js';
 import { ctxWith, apply } from './ops-helpers.js';
-import { T0, HOUR } from '../helpers.js';
+import { T0, MIN, HOUR } from '../helpers.js';
 
 /** assert.throws with a BoardError whose message matches. */
 const refuses = (fn, re, label) => assert.throws(fn, (e) => e instanceof BoardError && re.test(e.message), label);
@@ -72,16 +72,16 @@ test("whatsNew brings only what needs this agent's attention", () => {
   apply(ctx, postMessage(as('a2'), { taskId: 3, kind: 'comment', text: 'Relates to #1.' }));
   apply(ctx, postMessage(as('a2'), { taskId: 3, kind: 'comment', text: 'Unrelated.' }));
   apply(ctx, postMessage(as('a1'), { taskId: 1, kind: 'comment', text: 'My own note.' }));
-  assert.deepEqual(whatsNew(ctx.state, ctx.reg, 'a1', ctx.now - 1).map((i) => i.reason), ['answer', 'mention']);
-  assert.deepEqual(whatsNew(ctx.state, ctx.reg, 'a2', ctx.now - 1).map((i) => i.reason), ['question']);
-  assert.deepEqual(whatsNew(ctx.state, ctx.reg, 'a1', ctx.now), []);
-  assert.equal(whatsNew(ctx.state, ctx.reg, 'a1', ctx.now - 1)[0].authorName, 'Jade');
+  assert.deepEqual(whatsNew(ctx.state, ctx.reg, 'a1', { afterSeq: 0 }).map((i) => i.reason), ['answer', 'mention']);
+  assert.deepEqual(whatsNew(ctx.state, ctx.reg, 'a2', { afterSeq: 0 }).map((i) => i.reason), ['question']);
+  assert.deepEqual(whatsNew(ctx.state, ctx.reg, 'a1', { afterSeq: ctx.state.seq }), []);
+  assert.equal(whatsNew(ctx.state, ctx.reg, 'a1', { afterSeq: 0 })[0].authorName, 'Jade');
 });
 
 test('whatsNew reports the claimed task being unblocked', () => {
   const ctx = ctxWith({ tasks: [{ id: 1, assignee: 'a2' }, { id: 2, assignee: 'a1', dependsOn: [1] }] });
   apply(ctx, completeTask({ ...ctx, agentId: 'a2' }, { id: 1, summary: 'Shipped.' }));
-  assert.deepEqual(whatsNew(ctx.state, ctx.reg, 'a1', ctx.now - 1).map((i) => i.reason), ['unblocked']);
+  assert.deepEqual(whatsNew(ctx.state, ctx.reg, 'a1', { afterSeq: 0 }).map((i) => i.reason), ['unblocked']);
 });
 
 test('needsHuman lists questions to the human, agent suggestions and stalled claims', () => {
@@ -124,7 +124,7 @@ test('names written with events stay right after the registry forgets the agent;
   const n = needsHuman(ctx.state, ctx.reg, DEFAULTS, T0);
   assert.deepEqual(n.questions.map((q) => [q.taskId, q.askedBy]), [[1, 'Jade']]);
   assert.deepEqual(n.approvals, [{ id: 6, title: 'Offline mode', suggestedBy: 'Jade' }]);
-  assert.deepEqual(whatsNew(ctx.state, ctx.reg, 'a1', T0 - 1).map((i) => [i.reason, i.message.taskId, i.authorName]), [['update', 2, 'Jade']]);
+  assert.deepEqual(whatsNew(ctx.state, ctx.reg, 'a1', {}).map((i) => [i.reason, i.message.taskId, i.authorName]), [['update', 2, 'Jade']]);
   const done = getTask(ctx.state, ctx.reg, 3, []);
   assert.deepEqual([done.completedBy, done.completedByName], ['a2', 'Jade']);
   assert.equal(getTask(ctx.state, ctx.reg, 6, []).createdByName, 'Jade');
@@ -265,10 +265,10 @@ test('whatsNew pings notes addressed to the agent, and never its own actions', (
   apply(ctx, claimTask(amber, { id: 2, takeOver: true })); // the human asked Amber to resume #2
   apply(ctx, postMessage(amber, { taskId: 2, kind: 'question', text: 'Which hash function?' }));
   // the takeover note on Amber's new task is addressed to Jade: it is for Jade alone
-  assert.deepEqual(whatsNew(ctx.state, ctx.reg, 'a1', T0 - 1), []);
+  assert.deepEqual(whatsNew(ctx.state, ctx.reg, 'a1', {}), []);
   apply(ctx, completeTask(amber, { id: 2, summary: 'Shipped.' })); // closes Amber's own question
-  assert.deepEqual(whatsNew(ctx.state, ctx.reg, 'a1', T0 - 1), []);
-  assert.deepEqual(whatsNew(ctx.state, ctx.reg, 'a2', T0 - 1).map((i) => [i.reason, i.message.taskId, i.authorName, i.message.text]), [
+  assert.deepEqual(whatsNew(ctx.state, ctx.reg, 'a1', {}), []);
+  assert.deepEqual(whatsNew(ctx.state, ctx.reg, 'a2', {}).map((i) => [i.reason, i.message.taskId, i.authorName, i.message.text]), [
     ['update', 2, 'system', 'Amber took over from Jade, whose session had ended (folder /w/b).'],
   ]);
   // Amber releases the claim of Jade, who is gone again: the note reaches Jade although #1 is no longer hers
@@ -276,22 +276,45 @@ test('whatsNew pings notes addressed to the agent, and never its own actions', (
   apply(again, claimTask({ ...again, agentId: 'a2' }, { id: 1 }));
   endAgent(again.reg, 'a2', T0);
   apply(again, releaseTask(again, { id: 1, note: 'Nobody is on it; back to Ready.' }));
-  assert.deepEqual(whatsNew(again.state, again.reg, 'a2', T0 - 1).map((i) => [i.reason, i.message.text]), [
+  assert.deepEqual(whatsNew(again.state, again.reg, 'a2', {}).map((i) => [i.reason, i.message.text]), [
     ['update', "Amber released Jade's claim, whose session had ended."],
   ]);
-  assert.deepEqual(whatsNew(again.state, again.reg, 'a1', T0 - 1), []);
+  assert.deepEqual(whatsNew(again.state, again.reg, 'a1', {}), []);
 });
 
-test('whatsNew needs an agent id, and a since that is not a number means from the start', () => {
+test('a message stamped before the reader was last shown updates, but committed after, is still pinged', () => {
+  const ctx = ctxWith({ tasks: [{ id: 1, title: 'Vegetarian filter', assignee: 'a1' }] });
+  const jade = { ...ctx, agentId: 'a2' };
+  apply({ ...jade, now: T0 + 5 * MIN }, postMessage(jade, { taskId: 1, text: 'The recipe model is merged.' }));
+  // Amber is shown her updates at T0 + 10 min; her cursor moves to the board's sequence number
+  const cursor = ctx.state.seq;
+  assert.deepEqual(whatsNew(ctx.state, ctx.reg, 'a1', { afterSeq: cursor }), []);
+  // Jade's next write read the clock at T0 + 7 min, then waited for the lock until after that
+  apply({ ...jade, now: T0 + 7 * MIN }, postMessage(jade, { taskId: 1, text: 'The API now returns grams.' }));
+  const pings = whatsNew(ctx.state, ctx.reg, 'a1', { afterSeq: cursor });
+  assert.deepEqual(pings.map((i) => [i.reason, i.message.text, i.message.at]), [['update', 'The API now returns grams.', T0 + 7 * MIN]]);
+  // a time cursor would have skipped it: at T0 + 10 min it was not yet on the board, and it is stamped earlier
+  assert.deepEqual(whatsNew(ctx.state, ctx.reg, 'a1', { afterSeq: cursor, since: T0 + 10 * MIN }), []);
+});
+
+test('whatsNew needs an agent id; a bad afterSeq means 0, and a since that is not a finite number filters nothing', () => {
   const ctx = ctxWith({ tasks: [{ id: 1, assignee: 'a1' }, { id: 2 }] });
   apply(ctx, postMessage({ ...ctx, agentId: 'a2' }, { taskId: 1, text: 'Heads up: the API changed.' }));
   // without the check, a missing id would match #2 as "its" task, since #2 has no assignee either
-  for (const who of [null, undefined, '', 5]) assert.deepEqual(whatsNew(ctx.state, ctx.reg, who, 0), [], String(who));
-  const hostile = { valueOf: () => T0 + HOUR }; // never used as a number
-  for (const since of [Number.NaN, undefined, null, 'yesterday', hostile]) {
-    assert.deepEqual(whatsNew(ctx.state, ctx.reg, 'a1', since).map((i) => i.reason), ['update'], String(since));
+  for (const who of [null, undefined, '', 5]) assert.deepEqual(whatsNew(ctx.state, ctx.reg, who), [], String(who));
+  const reasons = (opts) => whatsNew(ctx.state, ctx.reg, 'a1', opts).map((i) => i.reason);
+  const hostile = { valueOf: () => Number.MAX_SAFE_INTEGER }; // never used as a number
+  for (const afterSeq of [undefined, null, -1, 0.5, '5', Number.NaN, Number.POSITIVE_INFINITY, hostile]) {
+    assert.deepEqual(reasons({ afterSeq }), ['update'], `afterSeq ${String(afterSeq)}`);
   }
-  assert.deepEqual(whatsNew(ctx.state, ctx.reg, 'a1', Number.POSITIVE_INFINITY), []);
+  for (const since of [undefined, null, Number.NaN, Number.POSITIVE_INFINITY, 'tomorrow', hostile]) {
+    assert.deepEqual(reasons({ since }), ['update'], `since ${String(since)}`);
+  }
+  for (const opts of [undefined, null, 5, 'x', []]) assert.deepEqual(reasons(opts), ['update'], `options ${String(opts)}`);
+  assert.deepEqual(reasons({ afterSeq: ctx.state.seq - 1 }), ['update']);
+  assert.deepEqual(reasons({ afterSeq: ctx.state.seq }), []);
+  assert.deepEqual(reasons({ since: T0 }), ['update']); // from that time on, inclusive
+  assert.deepEqual(reasons({ since: T0 + 1 }), []);
 });
 
 test('the stalled countdown ends exactly when housekeeping releases the claim', () => {
@@ -315,7 +338,7 @@ test('queries never change the board, and their results share nothing with it', 
   listTasks(ctx.state, ctx.reg, { kind: 'epic', epic: 10 });
   for (const id of [2, 3, 4, 10, 11]) getTask(ctx.state, ctx.reg, id, ctx.state.messages);
   const view = getTask(ctx.state, ctx.reg, 1, ctx.state.messages);
-  const pings = whatsNew(ctx.state, ctx.reg, 'a1', 0);
+  const pings = whatsNew(ctx.state, ctx.reg, 'a1', {});
   const n = needsHuman(ctx.state, ctx.reg, DEFAULTS, T0);
   assert.deepEqual({ state: ctx.state, reg: ctx.reg }, before);
   list.items[0].labels.push('x');

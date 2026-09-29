@@ -100,6 +100,16 @@ test('unknown events and unknown tasks are ignored', () => {
   assert.equal(s.tasks[99], undefined);
 });
 
+test('message ring entries carry the seq of their event, which grows in commit order even when times do not', () => {
+  const s = board(created(1));
+  const first = msg('m1', 1, 'comment');
+  // its writer read the clock before it got the lock, so it is stamped earlier than the message before it
+  const second = { ...msg('m2', 1, 'comment'), at: first.at - 500 };
+  applyEvent(s, first);
+  applyEvent(s, second);
+  assert.deepEqual(s.messages.map((m) => [m.id, m.seq, m.at]), [['m1', first.seq, first.at], ['m2', second.seq, first.at - 500]]);
+});
+
 test('rings are bounded', () => {
   const s = board(created(1));
   for (let i = 0; i < RECENT_LIMIT + 10; i++) applyEvent(s, msg(`q${i}`, 1, 'question'));

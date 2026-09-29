@@ -12,8 +12,10 @@ export const PALETTE = Object.freeze([
 
 /**
  * An agent in the registry. host: where it runs (currentHost()), null when never recorded;
- * prevCursor: the cursor before its last advance, so a batch cut off by the ping cap can be shown
- * again; endedAt: null while live.
+ * cursor: the board sequence number up to which it has been shown updates (§5 Agent, §9), never a
+ * time, since times can arrive out of commit order; prevCursor: the cursor before its last
+ * advance, so a batch cut off by the ping cap can be shown again; endedAt: null while live.
+ * The registry reader drops a cursor or prevCursor that is not a whole number of 0 or more.
  * @typedef {{ id: string, name: string, color: string, folder: string | null, pid: number | null,
  *   host: string | null, branch: string | null, firstSeen: number, lastSeen: number, cursor: number,
  *   prevCursor?: number, endedAt: number | null }} Agent
@@ -110,8 +112,12 @@ function pickName(reg, folder, now, selfId) {
  * - A new agent is named by pickName; an ended agent that comes back keeps its name unless a live
  *   agent took it meanwhile, then it is renamed.
  * - Fields left out (or null for folder, pid and host) keep their stored value.
+ * - A new agent's cursor starts at info.seq, the board's current sequence number (0 when it is not
+ *   a whole number of 0 or more), so it is never pinged about older messages. A touch never moves
+ *   an existing agent's cursor: one that comes back is shown what it missed.
  * @param {Registry} reg
- * @param {{ id: string, folder?: string | null, pid?: number | null, host?: string | null, branch?: string | null }} info
+ * @param {{ id: string, folder?: string | null, pid?: number | null, host?: string | null, branch?: string | null,
+ *   seq?: number }} info
  * @param {number} now
  * @returns {Agent}
  */
@@ -128,7 +134,7 @@ export function touchAgent(reg, info, now) {
     const [name, color] = pickName(reg, info.folder, now, id);
     a = {
       id, name, color, folder: info.folder ?? null, pid: info.pid ?? null, host: info.host ?? null, branch: info.branch ?? null,
-      firstSeen: now, lastSeen: now, cursor: now, endedAt: null,
+      firstSeen: now, lastSeen: now, cursor: Number.isSafeInteger(info.seq) && info.seq >= 0 ? info.seq : 0, endedAt: null,
     };
     // defineProperty: plain assignment with the id "__proto__" would change the prototype, not add an entry
     Object.defineProperty(reg.agents, id, { value: a, writable: true, enumerable: true, configurable: true });

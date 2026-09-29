@@ -16,7 +16,9 @@
  *   messageCount: number, createdAt: number | null, updatedAt: number | null
  * }} Task
  * @typedef {{ seq: number, at: number | null, type: string, taskId: number, actor: string | null, text: string }} Activity
- * @typedef {{ id: string, taskId: number, author: string | null, authorName: string | null, kind: string,
+ * A message ring entry carries its event's seq: sequence numbers grow in commit order, while times can
+ * go backwards (a writer reads its clock before it gets the lock), so pings follow seq (§5 Agent cursor).
+ * @typedef {{ id: string, seq: number, taskId: number, author: string | null, authorName: string | null, kind: string,
  *   to: string | null, replyTo: string | null, replyToAuthor: string | null, mentions: number[],
  *   relayedFromHuman: boolean, about: string | null, at: number | null, text: string }} MessageHeader
  * @typedef {{ schema: number, seq: number, nextId: number, eventsSize: number,
@@ -24,7 +26,8 @@
  * @typedef {{ seq: number, at: number, type: string, actor: string, data: any }} BoardEvent
  */
 
-export const SCHEMA = 1;
+/** The snapshot's shape. A snapshot of another schema is not trusted: the log is replayed (2: ring entries carry seq). */
+export const SCHEMA = 2;
 export const RECENT_LIMIT = 500;
 export const MESSAGE_RING = 300;
 /** Files listed per task; touchTaskFile stops recording there, and the UI shows "200+". */
@@ -152,7 +155,7 @@ export function applyEvent(state, ev) {
     log(t.origin === 'agent' && !t.approved ? 'suggested' : 'created', t.id, t.title);
     return state;
   }
-  if (ev.type === 'message.posted') return applyMessage(state, d.message, at, log);
+  if (ev.type === 'message.posted') return applyMessage(state, d.message, ev.seq, at, log);
 
   const task = taskAt(state, d.id);
   if (!task) return state;
@@ -202,7 +205,7 @@ export function applyEvent(state, ev) {
   return state;
 }
 
-function applyMessage(state, m, at, log) {
+function applyMessage(state, m, seq, at, log) {
   if (!isObj(m) || !isStr(m.id) || !isStr(m.kind)) return state;
   const task = taskAt(state, m.taskId);
   if (!task) return state;
@@ -228,7 +231,7 @@ function applyMessage(state, m, at, log) {
   push(
     state.messages,
     {
-      id: m.id, taskId: task.id, author, authorName: displayName(m.authorName) ?? null, kind: m.kind, to, replyTo, replyToAuthor,
+      id: m.id, seq, taskId: task.id, author, authorName: displayName(m.authorName) ?? null, kind: m.kind, to, replyTo, replyToAuthor,
       mentions: Array.isArray(m.mentions) ? m.mentions.filter(isId) : [], relayedFromHuman: m.relayedFromHuman === true, about,
       at, text: snippet(m.text),
     },

@@ -88,6 +88,22 @@ test('touch refreshes lastSeen, revives an ended agent and keeps its name', () =
   assert.equal(again.name, 'Amber');
 });
 
+test('a new agent starts its cursor at the board sequence number it is given; a touch never moves a cursor', () => {
+  const reg = emptyRegistry();
+  const a = touchAgent(reg, { id: 's1', seq: 42 }, T0);
+  assert.equal(a.cursor, 42);
+  assert.equal(touchAgent(reg, { id: 's2', seq: 0 }, T0).cursor, 0);
+  const unusable = [undefined, null, -1, 1.5, '42', Number.NaN, Number.MAX_SAFE_INTEGER + 2, T0 + 0.5];
+  unusable.forEach((seq, i) => assert.equal(touchAgent(reg, { id: `s${i + 3}`, seq }, T0).cursor, 0, String(seq)));
+  a.prevCursor = 40;
+  touchAgent(reg, { id: 's1', seq: 99 }, T0 + MIN);
+  assert.deepEqual([a.cursor, a.prevCursor], [42, 40]);
+  // a session that comes back keeps its cursor, so it is shown what it missed
+  endAgent(reg, 's1', T0 + 2 * MIN);
+  touchAgent(reg, { id: 's1', seq: 120 }, T0 + 3 * MIN);
+  assert.deepEqual([a.endedAt, a.cursor, a.prevCursor], [null, 42, 40]);
+});
+
 test('an agent that comes back is renamed when a live agent took its name meanwhile', () => {
   const reg = emptyRegistry();
   touchAgent(reg, { id: 's1', folder: '/w/a' }, T0);
