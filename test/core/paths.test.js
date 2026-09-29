@@ -72,6 +72,7 @@ test('inside a repository the board lives in the git directory', () => {
     assert.ok(samePath(b.repoRoot, repo));
     assert.equal(b.projectName, path.basename(repo));
     assert.equal(b.inGit, true);
+    assert.equal(b.configRoot, repo);
   }
 });
 
@@ -83,6 +84,7 @@ test('every worktree shares the main repository board', () => {
   assert.ok(samePath(b.boardDir, path.join(repo, '.git', 'agentboard')));
   assert.ok(samePath(b.repoRoot, wt));
   assert.equal(b.projectName, path.basename(repo));
+  assert.ok(samePath(b.configRoot, repo)); // shared settings come from the main worktree
 });
 
 test('a worktree with a relative gitdir shares the main repository board', () => {
@@ -133,6 +135,7 @@ test('a submodule has its own board in its git dir', () => {
   assert.ok(samePath(b.boardDir, path.join(modules, 'agentboard')));
   assert.equal(b.repoRoot, sub);
   assert.equal(b.projectName, 'lib');
+  assert.equal(b.configRoot, sub);
   assert.equal(currentBranch(b.gitDir), git(sub, 'rev-parse', '--abbrev-ref', 'HEAD'));
 });
 
@@ -217,6 +220,7 @@ test('outside git the board lives under the home folder, keyed by path hash', ()
   assert.equal(b.gitDir, null);
   assert.equal(b.repoRoot, dir);
   assert.equal(b.projectName, path.basename(dir));
+  assert.equal(b.configRoot, dir);
   assert.ok(b.boardDir.startsWith(path.join(home, '.agentboard', 'boards')));
   assert.match(path.basename(b.boardDir), /^[0-9a-f]{64}$/);
 });
@@ -250,6 +254,7 @@ test('outside git a subfolder reuses the board of the nearest project folder', (
   assert.equal(deep.boardDir, top.boardDir);
   assert.equal(deep.repoRoot, proj);
   assert.equal(deep.projectName, 'proj');
+  assert.equal(deep.configRoot, proj);
 
   // a folder that already has a board
   const notes = path.join(base, 'notes');
@@ -293,6 +298,7 @@ test('inside git, every folder in the host project folder gets the project board
     assert.equal(b.boardDir, mcp.boardDir, cwd);
     assert.equal(b.repoRoot, project, cwd);
     assert.equal(b.gitDir, mcp.gitDir, cwd);
+    assert.equal(b.configRoot, project, cwd);
   }
   // without a project folder, the submodule and the nested repository have their own boards
   assert.ok(samePath(resolveBoard(submodule).boardDir, path.join(project, '.git', 'modules', 'libs', 'lib', 'agentboard')));
@@ -300,6 +306,32 @@ test('inside git, every folder in the host project folder gets the project board
   // a folder outside the project folder is resolved from itself
   const other = track(tempRepo());
   assert.ok(samePath(resolveBoard(other, withProject).boardDir, path.join(other, '.git', 'agentboard')));
+});
+
+test('a worktree inside the host project folder shares its board but keeps its own root and branch', () => {
+  const project = track(tempRepo());
+  const main = git(project, 'rev-parse', '--abbrev-ref', 'HEAD');
+  const wt = path.join(project, '.worktrees', 'feat');
+  git(project, 'worktree', 'add', '-q', '-b', 'feat', wt);
+  fs.mkdirSync(path.join(wt, 'src'));
+
+  const withProject = { projectDir: project };
+  const mcp = resolveBoard(project, withProject);
+  const direct = resolveBoard(wt, { projectDir: wt }); // an agent started in the worktree itself
+  for (const cwd of [wt, path.join(wt, 'src')]) {
+    const b = resolveBoard(cwd, withProject);
+    assert.equal(b.boardDir, mcp.boardDir, cwd);
+    assert.ok(samePath(b.boardDir, direct.boardDir), cwd);
+    assert.equal(b.repoRoot, wt, cwd);
+    assert.ok(samePath(b.gitDir, direct.gitDir), cwd);
+    assert.equal(currentBranch(b.gitDir), 'feat', cwd);
+    assert.equal(toRepoPath(b.repoRoot, path.join(wt, 'src', 'a.js')), 'src/a.js', cwd);
+    assert.equal(b.configRoot, project, cwd);
+    assert.equal(b.projectName, mcp.projectName, cwd);
+  }
+  assert.equal(mcp.repoRoot, project);
+  assert.equal(currentBranch(mcp.gitDir), main);
+  assert.ok(samePath(direct.configRoot, project));
 });
 
 test('outside git, every folder in the host project folder gets the project board (one session, one board)', () => {
@@ -379,7 +411,7 @@ test("a .git owned by another user stops the search, like git's dubious-ownershi
   assert.equal(resolveBoard(outer, { ...isolated(outer, home), uid: owner + 1 }).inGit, false);
 });
 
-test('the project name of a bare repository with worktrees drops .git, and a .bare folder takes its parent name', () => {
+test('a bare repository with worktrees: the name drops .git or takes the parent of .bare, and each worktree holds its own settings', () => {
   const origin = track(tempRepo());
   const base = track(tempDir());
 
@@ -389,6 +421,7 @@ test('the project name of a bare repository with worktrees drops .git, and a .ba
   const b = resolveBoard(main);
   assert.equal(b.projectName, 'shop');
   assert.ok(samePath(b.boardDir, path.join(base, 'shop.git', 'agentboard')));
+  assert.equal(b.configRoot, main); // no main checkout: the worktree itself
 
   const tools = path.join(base, 'tools');
   fs.mkdirSync(tools);
@@ -400,6 +433,7 @@ test('the project name of a bare repository with worktrees drops .git, and a .ba
     const r = resolveBoard(cwd);
     assert.equal(r.projectName, 'tools', cwd);
     assert.ok(samePath(r.boardDir, path.join(tools, '.bare', 'agentboard')), cwd);
+    assert.equal(r.configRoot, cwd);
   }
 });
 

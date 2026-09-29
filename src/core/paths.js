@@ -163,6 +163,17 @@ function repoName(commonDir) {
 }
 
 /**
+ * The main worktree, whose `.agentboard/` settings apply to the whole shared board: the folder
+ * holding the common dir when that is named `.git`; otherwise (a bare repository, a `.bare`
+ * layout, `--separate-git-dir`, a submodule) `fallback`, the caller's own worktree.
+ */
+function mainWorktree(commonDir, fallback) {
+  if (path.basename(commonDir) !== '.git') return fallback;
+  const main = path.dirname(commonDir);
+  return isDir(main) ? main : fallback;
+}
+
+/**
  * The folder a board belongs to outside git, so that `cd` into a subfolder keeps the same board:
  * the nearest folder, from `abs` up, that has a `.agentboard/` folder or already has a board; else
  * `abs`. Above `abs`, the search never considers a file-system root, the home folder or its
@@ -209,7 +220,10 @@ function startFolder(abs, projectDir) {
  * One session, one board: when `cwd` lies inside `projectDir`, the search starts from `projectDir`
  * instead, inside git or not. Hooks pass the agent's current folder and the MCP server passes the
  * project folder, so a `cd` into a submodule, a nested repository or a subfolder with its own
- * `.agentboard/` must not give the two a different board. A `cwd` outside `projectDir` is resolved
+ * `.agentboard/` must not give the two a different board. The one exception keeps the board and
+ * changes only the local view: when `cwd` is in a linked worktree of the same repository (for
+ * example `project/.worktrees/feat`), `repoRoot` and `gitDir` are that worktree's, so the branch
+ * and repo-relative paths match an agent started there. A `cwd` outside `projectDir` is resolved
  * from itself.
  * @param {string} cwd
  * @param {{ home?: string, projectDir?: string, env?: Record<string, string | undefined>, uid?: number | null, ownerOf?: (file: string) => number }} [opts]
@@ -217,24 +231,39 @@ function startFolder(abs, projectDir) {
  *   example CLAUDE_PROJECT_DIR); env: for GIT_CEILING_DIRECTORIES (default process.env); uid: the
  *   user who must own a `.git` (default process.getuid(), none on Windows; null: no owner check);
  *   ownerOf: owner uid of a `.git` path (default: from its stat; for tests).
- * @returns {{ boardDir: string, repoRoot: string, projectName: string, inGit: boolean, gitDir: string | null }}
+ * @returns {{ boardDir: string, repoRoot: string, configRoot: string, projectName: string, inGit: boolean, gitDir: string | null }}
+ *   repoRoot: the working tree (or non-git folder) that file paths are relative to; configRoot: the
+ *   folder whose `.agentboard/` settings apply to the board (the main worktree in git, else repoRoot).
  */
 export function resolveBoard(cwd, opts = {}) {
   const home = path.resolve(opts.home ?? os.homedir());
-  const start = startFolder(path.resolve(cwd), opts.projectDir);
+  const abs = path.resolve(cwd);
+  const start = startFolder(abs, opts.projectDir);
   const ceilings = ceilingKeys((opts.env ?? process.env).GIT_CEILING_DIRECTORIES);
   const homeKey = fold(home);
-  const stopAt = process.platform === 'win32' && within(fold(start), homeKey) ? homeKey : null;
   const uid = opts.uid !== undefined ? opts.uid : UID;
-  const git = findGit(start, { ceilings, stopAt, uid, ownerOf: opts.ownerOf });
+  const search = (from) => findGit(from, {
+    ceilings, uid, ownerOf: opts.ownerOf, stopAt: process.platform === 'win32' && within(fold(from), homeKey) ? homeKey : null,
+  });
+  const git = search(start);
   if (git) {
+    let local = git;
+    if (start !== abs) {
+      const here = search(abs);
+      if (here && here.gitDir !== git.gitDir && samePath(here.commonDir, git.commonDir)) local = here;
+    }
     return {
-      boardDir: path.join(git.commonDir, NAME), repoRoot: git.top, projectName: repoName(git.commonDir), inGit: true, gitDir: git.gitDir,
+      boardDir: path.join(git.commonDir, NAME),
+      repoRoot: local.top,
+      configRoot: mainWorktree(git.commonDir, local.top),
+      projectName: repoName(git.commonDir),
+      inGit: true,
+      gitDir: local.gitDir,
     };
   }
   const { root, key } = nonGitFolder(start, { home, ceilings });
   return {
-    boardDir: path.join(home, `.${NAME}`, 'boards', sha256(key)), repoRoot: root, projectName: baseName(root), inGit: false, gitDir: null,
+    boardDir: path.join(home, `.${NAME}`, 'boards', sha256(key)), repoRoot: root, configRoot: root, projectName: baseName(root), inGit: false, gitDir: null,
   };
 }
 
