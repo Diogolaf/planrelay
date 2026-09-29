@@ -61,7 +61,8 @@ const FIELDS = {
 
 // ---------------------------------------------------------------------------------------------
 // Input normalization (§14). Every value an agent sends goes through these; the MCP layer passes
-// tool arguments straight through, so this is the only validator.
+// tool arguments straight through, so this is the only validator. queries.js checks list filters
+// with the exported ones, so both answer a bad value the same way.
 // ---------------------------------------------------------------------------------------------
 
 /**
@@ -96,7 +97,7 @@ const given = (obj, key) => (Object.hasOwn(obj, key) && obj[key] != null ? obj[k
  * `allowed` is an error that lists the allowed ones (§14).
  * @param {unknown} input @param {string[]} allowed
  */
-function fieldsOf(input, allowed) {
+export function fieldsOf(input, allowed) {
   if (input == null) return {};
   if (typeof input !== 'object' || Array.isArray(input)) fail('The input must be an object of named fields.');
   for (const key of Object.keys(input)) {
@@ -120,7 +121,7 @@ function echo(value) {
 }
 
 /** " (got …)" for an error message about a bad value. */
-const got = (value) => ` (got ${echo(value)})`;
+export const got = (value) => ` (got ${echo(value)})`;
 
 /**
  * Cuts a stored text down to `max` characters: never inside a surrogate pair or a [REDACTED] marker.
@@ -181,7 +182,7 @@ function flag(value, field) {
 }
 
 /** A task number: a whole number of 1 or more. Checked before any lookup. */
-function taskNumber(value, field) {
+export function taskNumber(value, field) {
   if (value == null) fail(`${field} is required: a task number such as 12.`);
   if (!Number.isSafeInteger(value) || value < 1) {
     const hint = typeof value === 'string' && /^\s*#?\d+\s*$/.test(value) ? ', written as a number without quotes or "#"' : '';

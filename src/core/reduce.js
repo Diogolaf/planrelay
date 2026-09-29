@@ -38,7 +38,7 @@ const isId = (v) => Number.isSafeInteger(v) && v >= 1;
 const isStr = (v) => typeof v === 'string';
 const strOrNull = (v) => (isStr(v) ? v : null);
 /** A display name: trimmed, 1 to NAME_MAX characters; undefined when unusable. */
-const displayName = (v) => {
+export const displayName = (v) => {
   const s = isStr(v) ? v.trim() : '';
   return s !== '' && s.length <= NAME_MAX ? s : undefined;
 };
