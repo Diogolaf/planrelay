@@ -74,9 +74,30 @@ test("whatsNew brings only what needs this agent's attention", () => {
   apply(ctx, postMessage(as('a2'), { taskId: 3, kind: 'comment', text: 'Unrelated.' }));
   apply(ctx, postMessage(as('a1'), { taskId: 1, kind: 'comment', text: 'My own note.' }));
   assert.deepEqual(whatsNew(ctx.state, ctx.reg, 'a1', { afterSeq: 0 }).items.map((i) => i.reason), ['answer', 'mention']);
-  assert.deepEqual(whatsNew(ctx.state, ctx.reg, 'a2', { afterSeq: 0 }).items.map((i) => i.reason), ['question']);
+  // the question is answered by now, so it no longer pings a2
+  assert.deepEqual(whatsNew(ctx.state, ctx.reg, 'a2', { afterSeq: 0 }).items, []);
   assert.deepEqual(whatsNew(ctx.state, ctx.reg, 'a1', { afterSeq: ctx.state.seq }).items, []);
   assert.equal(whatsNew(ctx.state, ctx.reg, 'a1', { afterSeq: 0 }).items[0].authorName, 'Jade');
+});
+
+test('a question still open pings its addressee; one that was closed does not', () => {
+  const ctx = ctxWith({ tasks: [{ id: 1, assignee: 'a1' }] });
+  const as = (agentId) => ({ ...ctx, agentId });
+  apply(ctx, postMessage(as('a1'), { taskId: 1, kind: 'question', to: 'a2', text: 'Which endpoint?' }));
+  assert.deepEqual(whatsNew(ctx.state, ctx.reg, 'a2', { afterSeq: 0 }).items.map((i) => i.reason), ['question']);
+  apply(ctx, completeTask(as('a1'), { id: 1, summary: 'Done without it.' }));
+  assert.deepEqual(whatsNew(ctx.state, ctx.reg, 'a2', { afterSeq: 0 }).items.filter((i) => i.reason === 'question'), []);
+});
+
+test('an answer ping carries a snippet of the question, or null once it left the ring', () => {
+  const ctx = ctxWith({ tasks: [{ id: 1, assignee: 'a1' }] });
+  const as = (agentId) => ({ ...ctx, agentId });
+  apply(ctx, postMessage(as('a1'), { taskId: 1, kind: 'question', to: 'human', text: 'Oven time?' }));
+  const qid = ctx.state.tasks[1].openQuestions[0].id;
+  apply(ctx, postMessage(as('a2'), { taskId: 1, kind: 'answer', replyTo: qid, text: '20 min', relayedFromHuman: true }));
+  assert.equal(whatsNew(ctx.state, ctx.reg, 'a1', { afterSeq: 0 }).items[0].question, 'Oven time?');
+  ctx.state.messages = ctx.state.messages.filter((m) => m.kind !== 'question');
+  assert.equal(whatsNew(ctx.state, ctx.reg, 'a1', { afterSeq: 0 }).items[0].question, null);
 });
 
 test('whatsNew reports the claimed task being unblocked', () => {

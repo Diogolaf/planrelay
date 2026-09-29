@@ -228,7 +228,12 @@ export function getTask(state, reg, id, messages = []) {
   };
 }
 
-/** @typedef {{ reason: 'answer' | 'question' | 'update' | 'unblocked' | 'mention', message: MessageHeader, authorName: string }} Ping */
+/**
+ * `question`, on an answer ping only: a snippet of the question it answers, null when that
+ * question has left the message ring.
+ * @typedef {{ reason: 'answer' | 'question' | 'update' | 'unblocked' | 'mention', message: MessageHeader, authorName: string,
+ *   question?: string | null }} Ping
+ */
 
 /**
  * Updates for one agent (§9), oldest first:
@@ -280,14 +285,25 @@ export function whatsNew(state, reg, agentId, options = {}) {
     /** @type {Ping['reason'] | null} */
     let reason = null;
     if (m.kind === 'answer' && m.replyToAuthor === agentId) reason = 'answer';
-    else if (m.kind === 'question' && m.to === agentId) reason = 'question';
+    else if (m.kind === 'question' && m.to === agentId) {
+      // a question that is closed by now (its asker completed the task, say) needs no answer
+      if (!state.tasks[m.taskId]?.openQuestions.some((q) => q.id === m.id)) continue;
+      reason = 'question';
+    }
     else if (m.to === agentId) reason = 'update';
     else if (m.holder === agentId) {
       if (m.author !== 'system') reason = 'update';
       else if (m.about === 'unblocked') reason = 'unblocked';
       else if (m.about === 'dependencies-done') reason = 'update';
     } else if (mine && m.mentions.includes(mine.id)) reason = 'mention';
-    if (reason) items.push({ reason, message: copyOf(m, RING_FIELDS), authorName: writtenBy(reg, m.author, m.authorName) });
+    if (!reason) continue;
+    /** @type {Ping} */
+    const ping = { reason, message: copyOf(m, RING_FIELDS), authorName: writtenBy(reg, m.author, m.authorName) };
+    if (reason === 'answer') {
+      const asked = state.messages.find((q) => q.kind === 'question' && q.id === m.replyTo);
+      ping.question = asked ? asked.text : null;
+    }
+    items.push(ping);
   }
   const oldest = state.messages[0];
   const olderDropped = state.messages.length >= MESSAGE_RING && oldest.seq > afterSeq + 1;

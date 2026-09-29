@@ -38,24 +38,26 @@ export function wrapBoardData(lines) {
  */
 export function formatPing(item) {
   const m = item.message;
+  if (m.kind === 'system') return `#${m.taskId} · ${m.text}`;
   const quote = `"${m.text}"`;
   const relayed = m.relayedFromHuman === true;
+  const by = relayed ? ` (relayed by ${item.authorName})` : '';
+  const who = relayed ? 'the human' : item.authorName;
   switch (item.reason) {
-    case 'answer':
-      return relayed
-        ? `#${m.taskId} · the human answered your question (relayed by ${item.authorName}): ${quote}`
-        : `#${m.taskId} · ${item.authorName} answered your question: ${quote}`;
+    case 'answer': {
+      const asked = item.question ? ` "${item.question}"` : '';
+      return `#${m.taskId} · ${who} answered your question ${m.replyTo}${asked}${by}: ${quote}`;
+    }
     case 'question':
       return `#${m.taskId} · ${item.authorName} asks you: ${quote} (answer with post_message kind "answer", replyTo "${m.id}")`;
     case 'unblocked':
       return `#${m.taskId} · ${m.text}`;
     case 'mention':
-      return relayed
-        ? `#${m.taskId} · the human mentioned your task (relayed by ${item.authorName}): ${quote}`
-        : `#${m.taskId} · ${item.authorName} mentioned your task: ${quote}`;
+      return `#${m.taskId} · ${who} mentioned your task${by}: ${quote}`;
     default:
+      if (m.kind === 'answer') return `#${m.taskId} · ${who} answered question ${m.replyTo} on your task${by}: ${quote}`;
       return relayed
-        ? `#${m.taskId} · the human wrote a ${m.kind} (relayed by ${item.authorName}): ${quote}`
+        ? `#${m.taskId} · the human wrote a ${m.kind}${by}: ${quote}`
         : `#${m.taskId} · ${item.authorName} (${m.kind}): ${quote}`;
   }
 }
@@ -113,6 +115,8 @@ export function formatBrief({ agentName, projectName, state, reg, agentId, pings
       const from = q.author === agentId ? '' : ` from ${q.authorName}`;
       lines.push(`Open question ${q.id}${from} to ${recipient(reg, q.to, agentId)}: ${snippet(q.text)}`);
     }
+    const more = mine.openQuestions.length - 2;
+    if (more > 0) lines.push(`…and ${more} more open question${more === 1 ? '' : 's'}; get_task #${mine.id} lists them.`);
   } else {
     const c = boardCounts(state);
     lines.push(

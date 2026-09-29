@@ -24,12 +24,12 @@ test('each ping reason reads clearly', () => {
     '#14 · Jade asks you: "Which API?" (answer with post_message kind "answer", replyTo "m7")',
   );
   assert.equal(
-    formatPing({ reason: 'answer', message: msg({ kind: 'answer', text: 'Yes', relayedFromHuman: true }), authorName: 'Jade' }),
-    '#14 · the human answered your question (relayed by Jade): "Yes"',
+    formatPing({ reason: 'answer', message: msg({ kind: 'answer', replyTo: 'm4', text: 'Yes', relayedFromHuman: true }), authorName: 'Jade', question: 'Oven time?' }),
+    '#14 · the human answered your question m4 "Oven time?" (relayed by Jade): "Yes"',
   );
   assert.equal(
-    formatPing({ reason: 'answer', message: msg({ kind: 'answer', text: 'Yes' }), authorName: 'Jade' }),
-    '#14 · Jade answered your question: "Yes"',
+    formatPing({ reason: 'answer', message: msg({ kind: 'answer', replyTo: 'm4', text: 'Yes' }), authorName: 'Jade', question: null }),
+    '#14 · Jade answered your question m4: "Yes"',
   );
   assert.equal(formatPing({ reason: 'unblocked', message: msg({ kind: 'system', text: '#7 is done — #14 is unblocked.' }), authorName: 'system' }), '#14 · #7 is done — #14 is unblocked.');
   assert.equal(formatPing({ reason: 'mention', message: msg({}), authorName: 'Jade' }), '#14 · Jade mentioned your task: "hello"');
@@ -37,6 +37,18 @@ test('each ping reason reads clearly', () => {
   assert.equal(
     formatPing({ reason: 'update', message: msg({ relayedFromHuman: true }), authorName: 'Jade' }),
     '#14 · the human wrote a comment (relayed by Jade): "hello"',
+  );
+  assert.equal(
+    formatPing({ reason: 'update', message: msg({ kind: 'answer', replyTo: 'm3', text: 'Yes' }), authorName: 'Jade' }),
+    '#14 · Jade answered question m3 on your task: "Yes"',
+  );
+  assert.equal(
+    formatPing({ reason: 'update', message: msg({ kind: 'answer', replyTo: 'm3', text: 'Yes', relayedFromHuman: true }), authorName: 'Jade' }),
+    '#14 · the human answered question m3 on your task (relayed by Jade): "Yes"',
+  );
+  assert.equal(
+    formatPing({ reason: 'update', message: msg({ kind: 'system', text: 'Released the claim on #14.' }), authorName: 'system' }),
+    '#14 · Released the claim on #14.',
   );
 });
 
@@ -81,6 +93,20 @@ test('a question asked by someone else names the asker (stored name), and long t
   assert.match(out, /Open question m3 from Maple to you: Ok\?/);
   assert.match(out, /Your task: #14 T+… \(/);
   assert.ok(dataLines(out).every((l) => l.length < 320));
+});
+
+test('the brief says how many open questions it leaves out', () => {
+  const q = (id, to) => ({ id, to, author: 'a2', authorName: 'Jade', at: 0, text: `Q${id}?` });
+  const three = ctxWith({ tasks: [{ id: 14, title: 'X', assignee: 'a1', openQuestions: [q('m1', 'human'), q('m2', 'any'), q('m3', 'a1')] }] });
+  const args = { agentName: 'Amber', projectName: 'p', agentId: 'a1', pings: found([]), maxPings: 8, rulesFile: null };
+  const out = formatBrief({ ...args, state: three.state, reg: three.reg });
+  assert.match(out, /Open question m2/);
+  assert.doesNotMatch(out, /Open question m3/);
+  assert.match(out, /…and 1 more open question; get_task #14 lists them./);
+  three.state.tasks[14].openQuestions.push(q('m4', 'human'), q('m5', 'human'));
+  assert.match(formatBrief({ ...args, state: three.state, reg: three.reg }), /…and 3 more open questions; get_task #14 lists them./);
+  const two = ctxWith({ tasks: [{ id: 14, title: 'X', assignee: 'a1', openQuestions: [q('m1', 'human'), q('m2', 'any')] }] });
+  assert.doesNotMatch(formatBrief({ ...args, state: two.state, reg: two.reg }), /more open question/);
 });
 
 test('config problems are surfaced inside the data block', () => {
