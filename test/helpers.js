@@ -13,10 +13,25 @@ export function tempDir() {
   return fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'ab-')));
 }
 
+let emptyGitConfig;
+
+/**
+ * Environment for running git in test repositories: no GIT_* variables inherited from a calling
+ * git hook, and an empty global config and no system config, so personal settings (signing,
+ * hooksPath, templates) cannot break tests.
+ */
+export function gitEnv() {
+  emptyGitConfig ??= path.join(tempDir(), 'gitconfig');
+  fs.writeFileSync(emptyGitConfig, '');
+  const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.toUpperCase().startsWith('GIT_')));
+  return { ...env, GIT_CONFIG_GLOBAL: emptyGitConfig, GIT_CONFIG_NOSYSTEM: '1' };
+}
+
 /** A fresh git repository with one empty commit, so worktrees can be added. */
 export function tempRepo() {
   const dir = tempDir();
-  const git = (...args) => execFileSync('git', args, { cwd: dir, stdio: 'ignore' });
+  const env = gitEnv();
+  const git = (...args) => execFileSync('git', args, { cwd: dir, env, stdio: 'ignore' });
   git('init', '-q');
   git('-c', 'user.email=t@example.invalid', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', 'init');
   return dir;
