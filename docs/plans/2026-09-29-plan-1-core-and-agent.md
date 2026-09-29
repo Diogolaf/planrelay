@@ -3151,7 +3151,7 @@ Expected: FAIL, module not found.
 `src/core/queries.js`:
 ```js
 import { nameOf, statusOf } from './agents.js';
-import { blockers, byRank, columnOf, COLUMNS, epicPath, epicProgress, epicTasks } from './derive.js';
+import { blockers, byRank, columnOf, COLUMNS, epicPath, epicProgress, inEpic } from './derive.js';
 import { claimedBy } from './ops.js';
 
 /** @typedef {import('./reduce.js').BoardState} BoardState */
@@ -3180,11 +3180,8 @@ export function listTasks(state, reg, f = {}) {
     .filter((t) => t.kind === kind)
     .map((t) => ({ t, column: columnOf(t, state.tasks), epic: epicPath(t, state.tasks) }));
   if (f.column) rows = rows.filter((r) => r.column === f.column);
-  if (f.epic != null) {
-    // Same membership rule as the epic progress bar.
-    const inside = new Set(epicTasks(f.epic, state.tasks).map((t) => t.id));
-    rows = rows.filter((r) => inside.has(r.t.id));
-  }
+  // Same membership rule as the epic progress bar; also lists sub-epics when kind is 'epic'.
+  if (f.epic != null) rows = rows.filter((r) => inEpic(r.t, f.epic, state.tasks));
   if (f.label) rows = rows.filter((r) => r.t.labels.includes(String(f.label).trim().toLowerCase()));
   if (f.changedSince != null) rows = rows.filter((r) => r.t.updatedAt >= f.changedSince);
   if (text) {
