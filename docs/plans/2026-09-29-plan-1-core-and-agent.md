@@ -4752,9 +4752,12 @@ Record anything unexpected as a task. Plan 3 runs the full acceptance script.
     - `whatsNew(state, reg, agentId, { afterSeq, since })` keeps messages with `seq > afterSeq`, and with `at >= since` when a time is given;
     - `cursor` and `prevCursor` in the registry are board sequence numbers;
     - `touchAgent` starts a new agent's cursor at `info.seq`, the current `state.seq` passed by the caller.
-  - **Task 15:** `describe` and the brief show `getTask`'s stored names (`createdByName`, `completedByName`, `assigneeName`, message `authorName`) instead of calling `nameOf`.
+  - **Task 15:**
+    - the brief shows `getTask`'s stored names (`createdByName`, `completedByName`, `assigneeName`, message `authorName`, open-question `authorName`) instead of calling `nameOf`;
+    - the brief passes `[]` as messages to `getTask`: it needs none, and a task can hold thousands;
+    - `whatsNew` returns `{ items, olderDropped }`; when `olderDropped` is true, the pings end with one line saying older updates fell out of the ping window and `get_task` has them.
   - **Task 16:**
-    - `advanceCursor(agent, state.seq)`, never a time; `touchAgent` receives `seq: state.seq`;
+    - `advanceCursor(agent, state.seq)`, never a time, and it handles an agent with no `cursor` (the registry reader drops unusable ones); `touchAgent` receives `seq: state.seq`;
     - at `SessionStart`, the new agent's cursor ends up after the events of its own claim inheritance, so it is never pinged with "X continues this task in a new session" about itself; add a test;
     - pass `host: currentHost(env)`;
     - run housekeeping through `transact`'s `before`;
@@ -4762,7 +4765,10 @@ Record anything unexpected as a task. Plan 3 runs the full acceptance script.
     - add a test showing that a session returning after `claimTimeoutHours` loses its claim at its first prompt and is pinged about it.
   - **Task 17:**
     - `whats_new` passes `{ afterSeq: agent.prevCursor ?? agent.cursor ?? 0, since }`, where the tool's `since` is an optional time filter that never moves the cursor;
-    - `list_tasks` and `get_task` rely on the queries' own validation (`BoardError` for bad filters; `limit` clamped to 1–200); `describe` uses `getTask`'s stored names;
+    - `whats_new` reads the registry and the state together under the board lock, so a cursor written just before its events are appended is never seen ahead of the board;
+    - `identify()` passes `seq: state.seq` to `touchAgent`, so an agent first registered by the server does not start at cursor 0;
+    - `list_tasks` and `get_task` rely on the queries' own validation (`BoardError` for bad filters, including `since`; `limit` clamped to 1–200);
+    - `describe` uses `getTask`'s stored names and shows at most the last 20 messages as snippets, never full texts;
     - render `{ unchanged: true }` results honestly ("#21 is already approved; nothing changed.");
     - `claim_task` accepts `takeOver`, and the reply names whose work was taken over;
     - `relayedFromHuman` messages render as "relayed by <agent>";
