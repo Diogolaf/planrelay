@@ -4757,7 +4757,8 @@ Record anything unexpected as a task. Plan 3 runs the full acceptance script.
     - the brief shows `getTask`'s stored names (`createdByName`, `completedByName`, `assigneeName`, message `authorName`, open-question `authorName`) instead of calling `nameOf`;
     - the brief passes `[]` as messages to `getTask`: it needs none, and a task can hold thousands;
     - `whatsNew` returns `{ items, olderDropped }`; when `olderDropped` is true, the pings end with one line saying older updates fell out of the ping window and `get_task` has them.
-  - **Task 16:**
+  - **Task 16 (done):** a live session never inherits a claim at SessionStart (compaction fires SessionStart with the same session id).
+  - **Task 16 (as planned):**
     - `advanceCursor(agent, state.seq)`, never a time, and it handles an agent with no `cursor` (the registry reader drops unusable ones); `touchAgent` receives `seq: state.seq`;
     - at `SessionStart`, the new agent's cursor ends up after the events of its own claim inheritance, so it is never pinged with "X continues this task in a new session" about itself; add a test;
     - pass `host: currentHost(env)`;
@@ -4765,6 +4766,7 @@ Record anything unexpected as a task. Plan 3 runs the full acceptance script.
     - always return the registry;
     - add a test showing that a session returning after `claimTimeoutHours` loses its claim at its first prompt and is pinged about it.
   - **Task 17:**
+    - error messages returned to the agent that quote board text (task titles in `BoardError` messages) put that text inside the `<agentboard-data>` fence, like the PreToolUse denial does;
     - `post_message` replies with the new message id (for example "Posted question m14 on #3."), so the asker can match the answer ping that names it;
     - pings and `whats_new` share Task 15's `formatPing`, so the wording is identical;
     - `whats_new` passes `{ afterSeq: agent.prevCursor ?? agent.cursor ?? 0, since }`, where the tool's `since` is an optional time filter that never moves the cursor;
