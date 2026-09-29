@@ -3238,6 +3238,7 @@ export function whatsNew(state, reg, agentId, since) {
     let reason = null;
     if (m.kind === 'answer' && m.replyToAuthor === agentId) reason = 'answer';
     else if (m.kind === 'question' && m.to === agentId) reason = 'question';
+    else if (m.to === agentId) reason = 'update'; // e.g. "your claim on #9 was released" after the task left you
     else if (mine && m.taskId === mine.id) reason = m.about === 'unblocked' ? 'unblocked' : 'update';
     else if (mine && m.mentions.includes(mine.id)) reason = 'mention';
     if (reason) items.push({ reason, message: m, authorName: nameOf(reg, m.author) });
