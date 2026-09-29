@@ -3,7 +3,7 @@
  * as they were when the event was written, so history stays readable after the registry forgets an agent
  * (§4); null when the event had none. requestedVia: the agent that relayed a task the human asked for.
  * @typedef {{ text: string, done: boolean }} ChecklistItem
- * @typedef {{ id: string, to: string, author: string | null, at: number | null, text: string }} OpenQuestion
+ * @typedef {{ id: string, to: string, author: string | null, authorName: string | null, at: number | null, text: string }} OpenQuestion
  * @typedef {{
  *   id: number, kind: 'task' | 'epic', title: string, description: string, parent: number | null,
  *   labels: string[], dependsOn: number[], origin: 'human' | 'agent', createdBy: string, createdByName: string | null,
@@ -18,9 +18,11 @@
  * @typedef {{ seq: number, at: number | null, type: string, taskId: number, actor: string | null, text: string }} Activity
  * A message ring entry carries its event's seq: sequence numbers grow in commit order, while times can
  * go backwards (a writer reads its clock before it gets the lock), so pings follow seq (§5 Agent cursor).
+ * holder: the task's assignee when the message was applied, or null, so news on a task reaches the
+ * agent that held it then, even after it completed or released the task (§9).
  * @typedef {{ id: string, seq: number, taskId: number, author: string | null, authorName: string | null, kind: string,
  *   to: string | null, replyTo: string | null, replyToAuthor: string | null, mentions: number[],
- *   relayedFromHuman: boolean, about: string | null, at: number | null, text: string }} MessageHeader
+ *   relayedFromHuman: boolean, about: string | null, holder: string | null, at: number | null, text: string }} MessageHeader
  * @typedef {{ schema: number, seq: number, nextId: number, eventsSize: number,
  *   tasks: Record<number, Task>, recent: Activity[], messages: MessageHeader[] }} BoardState
  * @typedef {{ seq: number, at: number, type: string, actor: string, data: any }} BoardEvent
@@ -212,11 +214,13 @@ function applyMessage(state, m, seq, at, log) {
   task.messageCount += 1;
   task.updatedAt = at;
   const author = strOrNull(m.author);
+  const authorName = displayName(m.authorName) ?? null;
+  const holder = isStr(task.assignee) && task.assignee !== '' ? task.assignee : null;
   const to = isStr(m.to) ? m.to : m.kind === 'question' ? 'any' : null;
   const replyTo = strOrNull(m.replyTo);
   let replyToAuthor = null;
   if (m.kind === 'question') {
-    task.openQuestions.push({ id: m.id, to, author, at, text: snippet(m.text) });
+    task.openQuestions.push({ id: m.id, to, author, authorName, at, text: snippet(m.text) });
   }
   if (m.kind === 'answer' && replyTo) {
     const q = task.openQuestions.find((x) => x.id === replyTo);
@@ -231,9 +235,9 @@ function applyMessage(state, m, seq, at, log) {
   push(
     state.messages,
     {
-      id: m.id, seq, taskId: task.id, author, authorName: displayName(m.authorName) ?? null, kind: m.kind, to, replyTo, replyToAuthor,
+      id: m.id, seq, taskId: task.id, author, authorName, kind: m.kind, to, replyTo, replyToAuthor,
       mentions: Array.isArray(m.mentions) ? m.mentions.filter(isId) : [], relayedFromHuman: m.relayedFromHuman === true, about,
-      at, text: snippet(m.text),
+      holder, at, text: snippet(m.text),
     },
     MESSAGE_RING,
   );

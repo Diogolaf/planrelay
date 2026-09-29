@@ -2,7 +2,7 @@ import { getAgent, nameOf, statusOf } from './agents.js';
 import { blockers, byRank, childrenIndex, columnOf, COLUMNS, epicPath, epicProgress, inEpic } from './derive.js';
 import { lastActivity } from './maintenance.js';
 import { BoardError, claimedBy, fieldsOf, got, taskNumber } from './ops.js';
-import { displayName, newTask } from './reduce.js';
+import { displayName, MESSAGE_RING, newTask } from './reduce.js';
 
 /**
  * Read-only views of the board for the agent tools (§8), the pings (§9) and the dashboard (§13).
@@ -37,12 +37,22 @@ const EPIC_HELP = 'list_tasks with kind "epic" shows the epics';
 const TASK_FIELDS = Object.freeze(Object.keys(newTask({})));
 /** The fields of a message in a task's message file that a task view carries. */
 const MESSAGE_FIELDS = ['id', 'taskId', 'author', 'authorName', 'kind', 'to', 'replyTo', 'relayedFromHuman', 'mentions', 'about', 'at', 'text'];
+/** The fields of a message ring entry (reduce.js MessageHeader) that a ping carries. */
+const RING_FIELDS = [
+  'id', 'seq', 'taskId', 'author', 'authorName', 'kind', 'to', 'replyTo', 'replyToAuthor', 'mentions', 'relayedFromHuman', 'about', 'holder',
+  'at', 'text',
+];
+/** The fields of an open question (reduce.js OpenQuestion) that a view carries. */
+const QUESTION_FIELDS = ['id', 'to', 'author', 'authorName', 'at', 'text'];
 
 const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 /** An own field's value; null and undefined both mean "not provided" (§14). */
 const given = (obj, key) => (Object.hasOwn(obj, key) && obj[key] != null ? obj[key] : undefined);
 /** The own `keys` of `obj` that it has, copied shallowly. */
 const pick = (obj, keys) => Object.fromEntries(keys.filter((k) => Object.hasOwn(obj, k)).map((k) => [k, obj[k]]));
+
+/** A copy of an object's `keys` only, sharing nothing with it. */
+const copyOf = (obj, keys) => structuredClone(pick(obj, keys));
 
 /** A history name: the one stored with the event when usable, else the registry's (nameOf). */
 const writtenBy = (reg, id, name) => displayName(name) ?? nameOf(reg, id);
@@ -181,11 +191,12 @@ export function getTask(state, reg, id, messages = []) {
   const all = Object.values(state.tasks);
   const column = columnOf(t, state.tasks);
   return {
-    ...structuredClone(pick(t, TASK_FIELDS)),
+    ...copyOf(t, TASK_FIELDS),
     createdByName: writtenBy(reg, t.createdBy, t.createdByName),
     requestedViaName: writtenByOrNull(reg, t.requestedVia, t.requestedViaName),
     assigneeName: holderName(reg, t),
     completedByName: writtenByOrNull(reg, t.completedBy, t.completedByName),
+    openQuestions: t.openQuestions.map((q) => copyOf(q, QUESTION_FIELDS)),
     column,
     epicPath: epicPath(t, state.tasks),
     blockers: column === 'blocked' ? blockers(t, state.tasks) : [],
@@ -194,39 +205,51 @@ export function getTask(state, reg, id, messages = []) {
     children: t.kind === 'epic' ? all.filter((o) => o.parent === t.id).map((o) => o.id) : [],
     messages: (Array.isArray(messages) ? messages : [])
       .filter(isObj)
-      .map((m) => ({ ...structuredClone(pick(m, MESSAGE_FIELDS)), authorName: writtenBy(reg, m.author, m.authorName) })),
+      .map((m) => ({ ...copyOf(m, MESSAGE_FIELDS), authorName: writtenBy(reg, m.author, m.authorName) })),
   };
 }
 
 /** @typedef {{ reason: 'answer' | 'question' | 'update' | 'unblocked' | 'mention', message: MessageHeader, authorName: string }} Ping */
 
 /**
- * Updates for one agent (§9), oldest first: answers to its questions, questions to it, other
- * messages addressed to it (such as "Released Amber's claim …" after the task left it), news on the
- * task it holds, and mentions of that task.
- * - Only messages committed after `afterSeq`, the agent's cursor: a board sequence number, never a
- *   time (§5 Agent), because a writer stamps its message before it gets the lock, so times can go
- *   backwards in commit order. When `since` is a finite number, only messages stamped at or after
- *   it as well: a filter, which never stands in for the cursor.
- * - Its own messages never count, nor do system notes on its task addressed to another agent,
- *   which are for that agent alone (the note to the former holder when this agent took over).
- * - An agentId that is not a non-empty string gets nothing. An afterSeq that is not a whole number
- *   of 0 or more means 0, and so does one ahead of the board (state.seq): the board was reset under
- *   the cursor, so the agent sees the ring once. A since that is not a finite number filters
- *   nothing; options that are not an object count as none. Nothing is ever coerced to a number.
+ * Updates for one agent (§9), oldest first:
+ * - answers to its questions; questions to it; any other message addressed to it (such as
+ *   "Released Amber's claim …" after the task left it);
+ * - news on a task it held when the news was posted (the ring entry's holder), even if it has
+ *   completed or released that task since. From another agent, any message; from the system, only
+ *   "unblocked" notes (other system notes count only when addressed to it, above), so the takeover
+ *   and inherit notes never ping the new holder;
+ * - mentions of the task it holds now.
+ * Its own messages never count.
+ *
+ * Which messages: those committed after `afterSeq`, the agent's cursor: a board sequence number,
+ * never a time (§5 Agent), because a writer stamps its message before it gets the lock, so times
+ * can go backwards in commit order. When `since` is given, only those stamped at or after it as
+ * well: a filter, which never stands in for the cursor.
+ *
+ * Input: `since` comes from a tool argument, so one that is given (not null) but not a finite
+ * number is refused with a BoardError, like list_tasks' changedSince. `afterSeq` comes from the
+ * registry and is lenient: not a whole number of 0 or more, or ahead of the board (state.seq, which
+ * means the board was reset under the cursor), it counts as 0, so the agent sees the ring once.
+ * An agentId that is not a non-empty string gets nothing; options that are not an object count as
+ * none. Nothing is ever coerced to a number.
+ *
+ * `olderDropped`: the ring is full and its oldest entry comes more than one seq after afterSeq,
+ * so messages after the cursor may have fallen out of the ring (MESSAGE_RING) unseen.
  * @param {BoardState} state
  * @param {Registry} reg
  * @param {unknown} agentId
  * @param {unknown} [options] { afterSeq?: number, since?: number } since: a Unix time in ms
- * @returns {Ping[]}
+ * @returns {{ items: Ping[], olderDropped: boolean }}
  */
 export function whatsNew(state, reg, agentId, options = {}) {
-  if (typeof agentId !== 'string' || agentId === '') return [];
   const o = isObj(options) ? options : {};
+  const sinceIn = given(o, 'since');
+  if (sinceIn !== undefined && !Number.isFinite(sinceIn)) throw new BoardError(`since must be a Unix time in milliseconds${got(sinceIn)}.`);
+  const since = sinceIn ?? null;
   const seqIn = given(o, 'afterSeq');
   const afterSeq = Number.isSafeInteger(seqIn) && seqIn >= 0 && seqIn <= state.seq ? seqIn : 0;
-  const sinceIn = given(o, 'since');
-  const since = Number.isFinite(sinceIn) ? sinceIn : null;
+  if (typeof agentId !== 'string' || agentId === '') return { items: [], olderDropped: false };
   const mine = claimedBy(state, agentId);
   /** @type {Ping[]} */
   const items = [];
@@ -237,13 +260,15 @@ export function whatsNew(state, reg, agentId, options = {}) {
     if (m.kind === 'answer' && m.replyToAuthor === agentId) reason = 'answer';
     else if (m.kind === 'question' && m.to === agentId) reason = 'question';
     else if (m.to === agentId) reason = 'update';
-    else if (mine && m.taskId === mine.id) {
-      const forAnother = m.author === 'system' && m.to != null;
-      if (!forAnother) reason = m.about === 'unblocked' ? 'unblocked' : 'update';
+    else if (m.holder === agentId) {
+      if (m.author !== 'system') reason = 'update';
+      else if (m.about === 'unblocked') reason = 'unblocked';
     } else if (mine && m.mentions.includes(mine.id)) reason = 'mention';
-    if (reason) items.push({ reason, message: { ...m, mentions: [...m.mentions] }, authorName: writtenBy(reg, m.author, m.authorName) });
+    if (reason) items.push({ reason, message: copyOf(m, RING_FIELDS), authorName: writtenBy(reg, m.author, m.authorName) });
   }
-  return items;
+  const oldest = state.messages[0];
+  const olderDropped = state.messages.length >= MESSAGE_RING && oldest.seq > afterSeq + 1;
+  return { items, olderDropped };
 }
 
 /**
@@ -257,7 +282,7 @@ export function whatsNew(state, reg, agentId, options = {}) {
  * @param {number} now
  */
 export function needsHuman(state, reg, cfg, now) {
-  /** Who asked each question still in the message ring, as stored when it was asked. */
+  /** Who asked each question still in the message ring, for questions stored without the name. */
   const askers = new Map(state.messages.filter((m) => m.kind === 'question').map((m) => [m.id, m.authorName]));
   /** @type {{ taskId: number, title: string, question: import('./reduce.js').OpenQuestion, askedBy: string }[]} */
   const questions = [];
@@ -268,7 +293,9 @@ export function needsHuman(state, reg, cfg, now) {
   for (const t of Object.values(state.tasks).sort(byRank)) {
     if (t.done) continue;
     for (const q of t.openQuestions) {
-      if (q.to === 'human') questions.push({ taskId: t.id, title: t.title, question: { ...q }, askedBy: writtenBy(reg, q.author, askers.get(q.id)) });
+      if (q.to !== 'human') continue;
+      const askedBy = writtenBy(reg, q.author, displayName(q.authorName) ?? askers.get(q.id));
+      questions.push({ taskId: t.id, title: t.title, question: copyOf(q, QUESTION_FIELDS), askedBy });
     }
     if (t.kind === 'task' && !t.approved && t.origin === 'agent') {
       approvals.push({ id: t.id, title: t.title, suggestedBy: writtenBy(reg, t.createdBy, t.createdByName) });

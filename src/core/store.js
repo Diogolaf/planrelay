@@ -494,9 +494,13 @@ function appendMessage(board, m) {
  * fn returns is saved instead, and it already holds before's changes).
  *
  * Order of a write (§6): agent registry, event append (the commit point: the whole batch or
- * nothing), message files, snapshot. A failure before the append throws and commits nothing (a
- * registry already written is harmless). A derived file that cannot be written, after the append
- * or in the rebuild a stale snapshot needs first, is logged and reported in `degraded`
+ * nothing), message files, snapshot. A failure before the append throws and commits none of the
+ * events, but the registry is already written and keeps its changes. Most are harmless, but not an
+ * agent cursor advanced to a seq the log did not reach: while the log is behind it, whatsNew
+ * counts it as 0, so that agent is shown one batch of pings again; once later writes reach it
+ * (housekeeping regenerates the same events under the same seqs), the messages committed up to it
+ * are never pinged. A derived file that cannot be written, after the append or in the rebuild a
+ * stale snapshot needs first, is logged and reported in `degraded`
  * ('messages', 'snapshot'), never thrown, so a committed write is not repeated; the stale snapshot
  * makes the next write rebuild the derived files.
  * @template R

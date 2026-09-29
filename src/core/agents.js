@@ -17,7 +17,7 @@ export const PALETTE = Object.freeze([
  * advance, so a batch cut off by the ping cap can be shown again; endedAt: null while live.
  * The registry reader drops a cursor or prevCursor that is not a whole number of 0 or more.
  * @typedef {{ id: string, name: string, color: string, folder: string | null, pid: number | null,
- *   host: string | null, branch: string | null, firstSeen: number, lastSeen: number, cursor: number,
+ *   host: string | null, branch: string | null, firstSeen: number, lastSeen: number, cursor?: number,
  *   prevCursor?: number, endedAt: number | null }} Agent
  * @typedef {import('./store.js').Registry} Registry
  */

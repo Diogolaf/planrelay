@@ -1,10 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { endAgent, nameOf } from '../../src/core/agents.js';
+import { endAgent, nameOf, touchAgent } from '../../src/core/agents.js';
 import { DEFAULTS } from '../../src/core/config.js';
-import { maintenance } from '../../src/core/maintenance.js';
+import { inheritClaim, maintenance } from '../../src/core/maintenance.js';
 import { BoardError, claimTask, completeTask, createTask, postMessage, releaseTask } from '../../src/core/ops.js';
 import { boardCounts, listTasks, getTask, whatsNew, needsHuman } from '../../src/core/queries.js';
+import { MESSAGE_RING } from '../../src/core/reduce.js';
 import { ctxWith, apply } from './ops-helpers.js';
 import { T0, MIN, HOUR } from '../helpers.js';
 
@@ -72,16 +73,16 @@ test("whatsNew brings only what needs this agent's attention", () => {
   apply(ctx, postMessage(as('a2'), { taskId: 3, kind: 'comment', text: 'Relates to #1.' }));
   apply(ctx, postMessage(as('a2'), { taskId: 3, kind: 'comment', text: 'Unrelated.' }));
   apply(ctx, postMessage(as('a1'), { taskId: 1, kind: 'comment', text: 'My own note.' }));
-  assert.deepEqual(whatsNew(ctx.state, ctx.reg, 'a1', { afterSeq: 0 }).map((i) => i.reason), ['answer', 'mention']);
-  assert.deepEqual(whatsNew(ctx.state, ctx.reg, 'a2', { afterSeq: 0 }).map((i) => i.reason), ['question']);
-  assert.deepEqual(whatsNew(ctx.state, ctx.reg, 'a1', { afterSeq: ctx.state.seq }), []);
-  assert.equal(whatsNew(ctx.state, ctx.reg, 'a1', { afterSeq: 0 })[0].authorName, 'Jade');
+  assert.deepEqual(whatsNew(ctx.state, ctx.reg, 'a1', { afterSeq: 0 }).items.map((i) => i.reason), ['answer', 'mention']);
+  assert.deepEqual(whatsNew(ctx.state, ctx.reg, 'a2', { afterSeq: 0 }).items.map((i) => i.reason), ['question']);
+  assert.deepEqual(whatsNew(ctx.state, ctx.reg, 'a1', { afterSeq: ctx.state.seq }).items, []);
+  assert.equal(whatsNew(ctx.state, ctx.reg, 'a1', { afterSeq: 0 }).items[0].authorName, 'Jade');
 });
 
 test('whatsNew reports the claimed task being unblocked', () => {
   const ctx = ctxWith({ tasks: [{ id: 1, assignee: 'a2' }, { id: 2, assignee: 'a1', dependsOn: [1] }] });
   apply(ctx, completeTask({ ...ctx, agentId: 'a2' }, { id: 1, summary: 'Shipped.' }));
-  assert.deepEqual(whatsNew(ctx.state, ctx.reg, 'a1', { afterSeq: 0 }).map((i) => i.reason), ['unblocked']);
+  assert.deepEqual(whatsNew(ctx.state, ctx.reg, 'a1', { afterSeq: 0 }).items.map((i) => i.reason), ['unblocked']);
 });
 
 test('needsHuman lists questions to the human, agent suggestions and stalled claims', () => {
@@ -124,7 +125,7 @@ test('names written with events stay right after the registry forgets the agent;
   const n = needsHuman(ctx.state, ctx.reg, DEFAULTS, T0);
   assert.deepEqual(n.questions.map((q) => [q.taskId, q.askedBy]), [[1, 'Jade']]);
   assert.deepEqual(n.approvals, [{ id: 6, title: 'Offline mode', suggestedBy: 'Jade' }]);
-  assert.deepEqual(whatsNew(ctx.state, ctx.reg, 'a1', {}).map((i) => [i.reason, i.message.taskId, i.authorName]), [['update', 2, 'Jade']]);
+  assert.deepEqual(whatsNew(ctx.state, ctx.reg, 'a1', {}).items.map((i) => [i.reason, i.message.taskId, i.authorName]), [['update', 2, 'Jade']]);
   const done = getTask(ctx.state, ctx.reg, 3, []);
   assert.deepEqual([done.completedBy, done.completedByName], ['a2', 'Jade']);
   assert.equal(getTask(ctx.state, ctx.reg, 6, []).createdByName, 'Jade');
@@ -265,21 +266,24 @@ test('whatsNew pings notes addressed to the agent, and never its own actions', (
   apply(ctx, claimTask(amber, { id: 2, takeOver: true })); // the human asked Amber to resume #2
   apply(ctx, postMessage(amber, { taskId: 2, kind: 'question', text: 'Which hash function?' }));
   // the takeover note on Amber's new task is addressed to Jade: it is for Jade alone
-  assert.deepEqual(whatsNew(ctx.state, ctx.reg, 'a1', {}), []);
-  apply(ctx, completeTask(amber, { id: 2, summary: 'Shipped.' })); // closes Amber's own question
-  assert.deepEqual(whatsNew(ctx.state, ctx.reg, 'a1', {}), []);
-  assert.deepEqual(whatsNew(ctx.state, ctx.reg, 'a2', {}).map((i) => [i.reason, i.message.taskId, i.authorName, i.message.text]), [
+  assert.deepEqual(whatsNew(ctx.state, ctx.reg, 'a1', {}).items, []);
+  apply(ctx, completeTask(amber, { id: 2, summary: 'Shipped.' })); // closes Amber's own question (e2f70cf)
+  assert.deepEqual(whatsNew(ctx.state, ctx.reg, 'a1', {}).items, []);
+  assert.ok(ctx.state.messages.some((m) => m.author === 'system' && m.holder === 'a1' && /^Open question m\d+ was closed/.test(m.text)));
+  assert.deepEqual(whatsNew(ctx.state, ctx.reg, 'a2', {}).items.map((i) => [i.reason, i.message.taskId, i.authorName, i.message.text]), [
     ['update', 2, 'system', 'Amber took over from Jade, whose session had ended (folder /w/b).'],
   ]);
-  // Amber releases the claim of Jade, who is gone again: the note reaches Jade although #1 is no longer hers
+  // Amber releases the claim of Jade, who is gone again: the note reaches Jade although #1 is no longer
+  // hers, and so does Amber's handoff note, posted while Jade still held #1
   const again = ctxWith({ tasks: [{ id: 1, title: 'Vegetarian filter' }] });
   apply(again, claimTask({ ...again, agentId: 'a2' }, { id: 1 }));
   endAgent(again.reg, 'a2', T0);
   apply(again, releaseTask(again, { id: 1, note: 'Nobody is on it; back to Ready.' }));
-  assert.deepEqual(whatsNew(again.state, again.reg, 'a2', {}).map((i) => [i.reason, i.message.text]), [
-    ['update', "Amber released Jade's claim, whose session had ended."],
+  assert.deepEqual(whatsNew(again.state, again.reg, 'a2', {}).items.map((i) => [i.reason, i.authorName, i.message.text]), [
+    ['update', 'Amber', 'Nobody is on it; back to Ready.'],
+    ['update', 'system', "Amber released Jade's claim, whose session had ended."],
   ]);
-  assert.deepEqual(whatsNew(again.state, again.reg, 'a1', {}), []);
+  assert.deepEqual(whatsNew(again.state, again.reg, 'a1', {}).items, []);
 });
 
 test('a message stamped before the reader was last shown updates, but committed after, is still pinged', () => {
@@ -288,28 +292,32 @@ test('a message stamped before the reader was last shown updates, but committed 
   apply({ ...jade, now: T0 + 5 * MIN }, postMessage(jade, { taskId: 1, text: 'The recipe model is merged.' }));
   // Amber is shown her updates at T0 + 10 min; her cursor moves to the board's sequence number
   const cursor = ctx.state.seq;
-  assert.deepEqual(whatsNew(ctx.state, ctx.reg, 'a1', { afterSeq: cursor }), []);
+  assert.deepEqual(whatsNew(ctx.state, ctx.reg, 'a1', { afterSeq: cursor }).items, []);
   // Jade's next write read the clock at T0 + 7 min, then waited for the lock until after that
   apply({ ...jade, now: T0 + 7 * MIN }, postMessage(jade, { taskId: 1, text: 'The API now returns grams.' }));
-  const pings = whatsNew(ctx.state, ctx.reg, 'a1', { afterSeq: cursor });
+  const pings = whatsNew(ctx.state, ctx.reg, 'a1', { afterSeq: cursor }).items;
   assert.deepEqual(pings.map((i) => [i.reason, i.message.text, i.message.at]), [['update', 'The API now returns grams.', T0 + 7 * MIN]]);
   // a time cursor would have skipped it: at T0 + 10 min it was not yet on the board, and it is stamped earlier
-  assert.deepEqual(whatsNew(ctx.state, ctx.reg, 'a1', { afterSeq: cursor, since: T0 + 10 * MIN }), []);
+  assert.deepEqual(whatsNew(ctx.state, ctx.reg, 'a1', { afterSeq: cursor, since: T0 + 10 * MIN }).items, []);
 });
 
-test('whatsNew needs an agent id; a bad afterSeq means 0, and a since that is not a finite number filters nothing', () => {
+test('whatsNew needs an agent id; a bad afterSeq (from the registry) means 0; a bad since (a tool argument) is refused', () => {
   const ctx = ctxWith({ tasks: [{ id: 1, assignee: 'a1' }, { id: 2 }] });
   apply(ctx, postMessage({ ...ctx, agentId: 'a2' }, { taskId: 1, text: 'Heads up: the API changed.' }));
   // without the check, a missing id would match #2 as "its" task, since #2 has no assignee either
-  for (const who of [null, undefined, '', 5]) assert.deepEqual(whatsNew(ctx.state, ctx.reg, who), [], String(who));
-  const reasons = (opts) => whatsNew(ctx.state, ctx.reg, 'a1', opts).map((i) => i.reason);
+  for (const who of [null, undefined, '', 5]) assert.deepEqual(whatsNew(ctx.state, ctx.reg, who).items, [], String(who));
+  const reasons = (opts) => whatsNew(ctx.state, ctx.reg, 'a1', opts).items.map((i) => i.reason);
   const hostile = { valueOf: () => Number.MAX_SAFE_INTEGER }; // never used as a number
   for (const afterSeq of [undefined, null, -1, 0.5, '5', Number.NaN, Number.POSITIVE_INFINITY, hostile]) {
     assert.deepEqual(reasons({ afterSeq }), ['update'], `afterSeq ${String(afterSeq)}`);
   }
-  for (const since of [undefined, null, Number.NaN, Number.POSITIVE_INFINITY, 'tomorrow', hostile]) {
-    assert.deepEqual(reasons({ since }), ['update'], `since ${String(since)}`);
-  }
+  for (const since of [undefined, null]) assert.deepEqual(reasons({ since }), ['update'], `since ${String(since)}`);
+  refuses(() => reasons({ since: '2026-09-30' }), /^since must be a Unix time in milliseconds \(got "2026-09-30"\)\.$/);
+  refuses(() => reasons({ since: Number.NaN }), /^since must be a Unix time in milliseconds \(got NaN\)\.$/);
+  refuses(() => reasons({ since: Number.POSITIVE_INFINITY }), /^since must be a Unix time in milliseconds \(got Infinity\)\.$/);
+  refuses(() => reasons({ since: hostile }), /^since must be a Unix time in milliseconds \(got an object\)\.$/);
+  // the same message list_tasks gives for changedSince
+  refuses(() => listTasks(ctx.state, ctx.reg, { changedSince: '2026-09-30' }), /^changedSince must be a Unix time in milliseconds \(got "2026-09-30"\)\.$/);
   for (const opts of [undefined, null, 5, 'x', []]) assert.deepEqual(reasons(opts), ['update'], `options ${String(opts)}`);
   assert.deepEqual(reasons({ afterSeq: ctx.state.seq - 1 }), ['update']);
   assert.deepEqual(reasons({ afterSeq: ctx.state.seq }), []);
@@ -320,10 +328,104 @@ test('whatsNew needs an agent id; a bad afterSeq means 0, and a since that is no
 test('a cursor ahead of the board counts as 0: the board was reset under it, so the agent sees the ring once', () => {
   const ctx = ctxWith({ tasks: [{ id: 1, title: 'Vegetarian filter', assignee: 'a1' }] });
   apply(ctx, postMessage({ ...ctx, agentId: 'a2' }, { taskId: 1, text: 'The recipe model is merged.' }));
-  const texts = (afterSeq) => whatsNew(ctx.state, ctx.reg, 'a1', { afterSeq }).map((i) => i.message.text);
+  const texts = (afterSeq) => whatsNew(ctx.state, ctx.reg, 'a1', { afterSeq }).items.map((i) => i.message.text);
   assert.deepEqual(texts(ctx.state.seq), []);
   assert.deepEqual(texts(ctx.state.seq + 1), ['The recipe model is merged.']);
   assert.deepEqual(texts(Number.MAX_SAFE_INTEGER), ['The recipe model is merged.']);
+});
+
+test('news on a task reaches the agent that held it when it was posted, even after it completes or releases the task', () => {
+  for (const [end, input] of [[completeTask, { id: 1, summary: 'Shipped the filter.' }], [releaseTask, { id: 1, note: 'Stopping here.' }]]) {
+    const ctx = ctxWith({ tasks: [{ id: 1, title: 'Vegetarian filter', assignee: 'a1' }] });
+    const jade = { ...ctx, agentId: 'a2' };
+    const cursor = ctx.state.seq; // Amber's prompt: her turn starts
+    apply(ctx, postMessage(jade, { taskId: 1, text: 'Heads-up: the API now returns grams.' }));
+    apply(ctx, end(ctx, input)); // Amber ends her turn with the task
+    const pings = whatsNew(ctx.state, ctx.reg, 'a1', { afterSeq: cursor }).items;
+    assert.deepEqual(pings.map((i) => [i.reason, i.message.text]), [['update', 'Heads-up: the API now returns grams.']], end.name);
+    if (end === releaseTask) {
+      // the next holder is not pinged about what was posted before its claim
+      apply(ctx, claimTask({ ...ctx, agentId: 'a2' }, { id: 1 }));
+      assert.deepEqual(whatsNew(ctx.state, ctx.reg, 'a2', { afterSeq: cursor }).items, []);
+      apply(ctx, postMessage(ctx, { taskId: 1, text: 'The old endpoint can go.' }));
+      assert.deepEqual(whatsNew(ctx.state, ctx.reg, 'a2', { afterSeq: cursor }).items.map((i) => i.message.text), ['The old endpoint can go.']);
+      assert.deepEqual(whatsNew(ctx.state, ctx.reg, 'a1', { afterSeq: cursor }).items.length, 1);
+    }
+  }
+});
+
+test('the agent that inherits a claim is not pinged by the inherit note, which is applied before the claim', () => {
+  const ctx = ctxWith({ tasks: [{ id: 1, title: 'Vegetarian filter', assignee: 'a2', claim: { folder: '/w/b', since: T0 } }] });
+  endAgent(ctx.reg, 'a2', T0);
+  touchAgent(ctx.reg, { id: 'a3', folder: '/w/b', seq: 0 }, T0 + MIN); // a new session in Jade's folder
+  apply(ctx, { events: inheritClaim(ctx.state, ctx.reg, 'a3', '/w/b') });
+  assert.equal(ctx.state.tasks[1].assignee, 'a3');
+  assert.deepEqual(ctx.state.messages.map((m) => [m.author, m.holder, m.text]), [['system', 'a2', 'Jade continues this task in a new session.']]);
+  assert.deepEqual(whatsNew(ctx.state, ctx.reg, 'a3', { afterSeq: 0 }).items, []);
+  assert.deepEqual(whatsNew(ctx.state, ctx.reg, 'a2', { afterSeq: 0 }).items, []);
+});
+
+test('whatsNew says when updates after the cursor fell out of the message ring', () => {
+  const ctx = ctxWith({ tasks: [{ id: 1, title: 'Vegetarian filter', assignee: 'a1' }, { id: 2, title: 'Password reset', assignee: 'a2' }, { id: 3, title: 'Chatter' }] });
+  const jade = { ...ctx, agentId: 'a2' };
+  apply(ctx, postMessage(ctx, { taskId: 1, kind: 'question', to: 'a2', text: 'Which unit?' }));
+  const cursor = ctx.state.seq; // Amber was shown her updates here, then was away
+  apply(ctx, postMessage(jade, { taskId: 1, kind: 'answer', replyTo: ctx.state.tasks[1].openQuestions[0].id, text: 'Grams.' }));
+  const seen = () => {
+    const out = whatsNew(ctx.state, ctx.reg, 'a1', { afterSeq: cursor });
+    return [out.items.map((i) => i.reason), out.olderDropped];
+  };
+  assert.deepEqual(seen(), [['answer'], false]);
+  for (let i = 0; i < MESSAGE_RING - 2; i++) apply(ctx, postMessage(jade, { taskId: 3, text: `Chatter ${i}` }));
+  assert.equal(ctx.state.messages.length, MESSAGE_RING);
+  assert.deepEqual(seen(), [['answer'], false]); // full, but nothing after the cursor is gone
+  apply(ctx, postMessage(jade, { taskId: 3, text: 'More chatter.' })); // the question (at the cursor) falls out
+  assert.deepEqual(seen(), [['answer'], false]);
+  apply(ctx, postMessage(jade, { taskId: 3, text: 'Even more chatter.' })); // the answer falls out
+  assert.deepEqual(seen(), [[], true]);
+  assert.equal(whatsNew(ctx.state, ctx.reg, 'a1', { afterSeq: ctx.state.messages[0].seq - 1 }).olderDropped, false);
+  // a ring that is not full has lost nothing, however far its first entry is past the cursor (other events in between)
+  const fresh = ctxWith({ tasks: [{ id: 1, title: 'Vegetarian filter' }] });
+  apply(fresh, claimTask(fresh, { id: 1 }));
+  apply(fresh, postMessage({ ...fresh, agentId: 'a2' }, { taskId: 1, text: 'Hello.' }));
+  assert.equal(fresh.state.messages[0].seq, 2);
+  assert.deepEqual(whatsNew(fresh.state, fresh.reg, 'a1', { afterSeq: 0 }).olderDropped, false);
+});
+
+test("a question to the human keeps its asker's name after it leaves the ring and the registry renames or forgets the asker", () => {
+  const ctx = ctxWith({ tasks: [{ id: 1, title: 'Vegetarian filter' }, { id: 2, title: 'Chatter' }] });
+  const jade = { ...ctx, agentId: 'a2' };
+  apply(ctx, claimTask(jade, { id: 1 }));
+  apply(ctx, postMessage(jade, { taskId: 1, kind: 'question', to: 'human', text: 'Metric or imperial?' }));
+  for (let i = 0; i < MESSAGE_RING; i++) apply(ctx, postMessage(ctx, { taskId: 2, text: `Note ${i}` }));
+  assert.equal(ctx.state.messages.some((m) => m.taskId === 1), false); // the question left the ring
+  const askedBy = () => needsHuman(ctx.state, ctx.reg, DEFAULTS, T0).questions.map((q) => q.askedBy);
+  ctx.reg.agents.a2.name = 'Cobalt'; // renamed when she came back (§4): history keeps "Jade"
+  assert.deepEqual(askedBy(), ['Jade']);
+  delete ctx.reg.agents.a2; // forgotten
+  assert.deepEqual(askedBy(), ['Jade']);
+  assert.equal(getTask(ctx.state, ctx.reg, 1, []).openQuestions[0].authorName, 'Jade');
+});
+
+test('pings and needs-you items carry their own fields only', () => {
+  const question = { id: 'm1', to: 'human', author: 'a2', authorName: 'Jade', at: T0, text: 'Oven time?' };
+  const ctx = ctxWith({
+    tasks: [
+      { id: 1, title: 'Vegetarian filter', assignee: 'a1', openQuestions: [{ ...question, extra: { deep: 1 } }] },
+      { id: 2, approved: false, origin: 'agent', createdBy: 'a2', title: 'Cache photos' },
+    ],
+  });
+  apply(ctx, postMessage({ ...ctx, agentId: 'a2' }, { taskId: 1, text: 'Hello.' }));
+  /** @type {any} */ (ctx.state.messages[0]).internal = { deep: 1 }; // as in a hand-edited snapshot
+  const [ping] = whatsNew(ctx.state, ctx.reg, 'a1', {}).items;
+  assert.deepEqual(Object.keys(ping).sort(), ['authorName', 'message', 'reason']);
+  assert.deepEqual(Object.keys(ping.message).sort(), [
+    'about', 'at', 'author', 'authorName', 'holder', 'id', 'kind', 'mentions', 'relayedFromHuman', 'replyTo', 'replyToAuthor', 'seq', 'taskId', 'text', 'to',
+  ]);
+  const n = needsHuman(ctx.state, ctx.reg, DEFAULTS, T0);
+  assert.deepEqual(n.questions, [{ taskId: 1, title: 'Vegetarian filter', question, askedBy: 'Jade' }]);
+  assert.deepEqual(n.approvals, [{ id: 2, title: 'Cache photos', suggestedBy: 'Jade' }]);
+  assert.deepEqual(getTask(ctx.state, ctx.reg, 1, []).openQuestions, [question]);
 });
 
 test('the stalled countdown ends exactly when housekeeping releases the claim', () => {
@@ -347,7 +449,7 @@ test('queries never change the board, and their results share nothing with it', 
   listTasks(ctx.state, ctx.reg, { kind: 'epic', epic: 10 });
   for (const id of [2, 3, 4, 10, 11]) getTask(ctx.state, ctx.reg, id, ctx.state.messages);
   const view = getTask(ctx.state, ctx.reg, 1, ctx.state.messages);
-  const pings = whatsNew(ctx.state, ctx.reg, 'a1', {});
+  const pings = whatsNew(ctx.state, ctx.reg, 'a1', {}).items;
   const n = needsHuman(ctx.state, ctx.reg, DEFAULTS, T0);
   assert.deepEqual({ state: ctx.state, reg: ctx.reg }, before);
   list.items[0].labels.push('x');

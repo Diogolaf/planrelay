@@ -110,6 +110,18 @@ test('message ring entries carry the seq of their event, which grows in commit o
   assert.deepEqual(s.messages.map((m) => [m.id, m.seq, m.at]), [['m1', first.seq, first.at], ['m2', second.seq, first.at - 500]]);
 });
 
+test("ring entries record who held the task when the message was applied; open questions keep the asker's name", () => {
+  const s = board(created(1));
+  applyEvent(s, msg('m1', 1, 'comment'));
+  applyEvent(s, ev('task.claimed', { id: 1, agent: 'a2', agentName: 'Jade' }, 'a2'));
+  applyEvent(s, msg('m2', 1, 'question', { author: 'a2', authorName: ' Jade ', to: 'human' }));
+  applyEvent(s, msg('m3', 1, 'question', { author: 'a3', authorName: 'J'.repeat(61) }));
+  assert.deepEqual(s.tasks[1].openQuestions.map((q) => [q.id, q.author, q.authorName]), [['m2', 'a2', 'Jade'], ['m3', 'a3', null]]);
+  applyEvent(s, ev('task.released', { id: 1, reason: 'manual' }, 'a2'));
+  applyEvent(s, msg('m4', 1, 'comment'));
+  assert.deepEqual(s.messages.map((m) => [m.id, m.holder]), [['m1', null], ['m2', 'a2'], ['m3', 'a2'], ['m4', null]]);
+});
+
 test('rings are bounded', () => {
   const s = board(created(1));
   for (let i = 0; i < RECENT_LIMIT + 10; i++) applyEvent(s, msg(`q${i}`, 1, 'question'));
