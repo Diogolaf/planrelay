@@ -9,6 +9,7 @@ const B64 = ALNUM + '+/';
 const B64URL = ALNUM + '_-';
 const HEX = '0123456789abcdef';
 const BASE32 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+const DJANGO = 'abcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*(-_=+)';
 
 /** Deterministic pseudo-random text (fixed seed), so every run sees the same fakes. */
 let seed = 12345;
@@ -69,6 +70,7 @@ const SECRETS = [
   token('OpenAI sk-proj- key with _ and -', 'sk-' + 'proj-' + rnd(40, B64URL) + '_' + rnd(60, B64URL) + '-' + rnd(50, B64URL)),
   token('OpenAI legacy sk- key', 'sk-' + rnd(24) + '4' + rnd(23)),
   token('OpenAI service account key', 'sk-' + 'svcacct-' + rnd(80, B64URL)),
+  ['sk-proj- key in a URL path', 'https://api.example.com/v1/', 'sk-' + 'proj-' + rnd(40, B64URL), '/models'],
   token('Anthropic api03 key', 'sk-' + 'ant-' + 'api03-' + rnd(93, B64URL) + 'AA'),
   token('Anthropic admin key', 'sk-' + 'ant-' + 'admin01-' + rnd(93, B64URL) + 'AA'),
   token('GitHub classic token', 'gh' + 'p_' + rnd(36)),
@@ -114,17 +116,24 @@ const SECRETS = [
   ['Authorization: Bearer', 'curl -H "Authorization: Bearer ', 'Br2' + rnd(30), '" https://api.example.com'],
   ['Authorization: Basic', 'Authorization: Basic ', 'QmFz' + rnd(20, B64) + '==', ''],
   ['lowercase authorization: bearer', 'authorization: bearer ', 'Br2' + rnd(30), ''],
+  ['Authorization: Token', 'Authorization: Token ', rnd(40, HEX), ''],
   ['x-api-key header', 'curl -H "x-api-key: ', 'Xk1' + rnd(30), '"'],
   ['lowercase .env password', 'db_password=', 'hunter2', ''],
   ['lowercase .env api_key', 'api_key=', 'Ak9' + rnd(20), ''],
   ['YAML password', 'database:\n  password: ', 'Yp6' + rnd(10), ''],
   ['DB_PASS', 'DB_PASS=', 'Dp5' + rnd(10), ''],
   ['SMTP_PASS', 'SMTP_PASS=', 'Sm5' + rnd(10), ''],
+  ['Django-style key with ( ) & in an unquoted .env line', 'SECRET_KEY=',
+    'django-' + 'insecure-' + 'Dj4' + rnd(12, DJANGO) + '(' + rnd(12, DJANGO) + ')&' + rnd(12, DJANGO), '\nDEBUG=0'],
+  ['.env password with & , ;', 'DB_PASSWORD=', 'Xy9' + '&abc,def;ghi2', ''],
+  ['.env password with )', 'DB_PASSWORD=', 'Xy9' + ')tail-' + 'secret-42', ''],
+  ['.env password starting with $', 'DB_PASSWORD=', '$ec' + 'ret123!x', ''],
   ['PRIVATE_KEY with 0x value', 'PRIVATE_KEY=', '0x' + rnd(64, HEX), ''],
   ['api_key query parameter', 'https://api.example.com/v1/x?api_key=', 'Qk3' + rnd(20), '&page=2'],
   ['access_token query parameter', 'https://graph.example.com/me?access_token=', 'Qa3' + rnd(40), ''],
   ['S3 presigned URL signature', 'https://bucket.s3.example.com/f.txt?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature=', rnd(64, HEX), ''],
   ['SAS URL signature', 'https://acct.blob.example.net/c/f.txt?sv=2022-11-02&sig=', rnd(40) + '%3D', '&se=2026-01-01'],
+  ['SAS signature starting with an escape', 'https://acct.blob.example.net/c/b?sv=2022-11-02&sig=', '%2B' + rnd(20) + '%3D', '&se=2026-01-01'],
   ['AccountKey in a connection string', 'DefaultEndpointsProtocol=https;AccountName=acct;AccountKey=', 'Az1' + rnd(85, B64) + '==', ';EndpointSuffix=core.example.net'],
   ['Password in a connection string', 'Server=db;Database=app;User Id=sa;Password=', 'Ss1' + rnd(10), ';'],
   ['PASSWORD with an unterminated quote', 'DB_PASSWORD="', 'Uq1' + rnd(10), ''],
@@ -161,6 +170,7 @@ const NORMAL = [
   'sk-learn style estimators live in src/models.',
   'Task: skeleton-loading-state-for-dashboard-cards',
   'Branch feat/sk-ui-component-library-refresh-v2',
+  'Branch feat/sk-ui-component-library-refresh-and-cleanup-v2',
   'The risk-assessment-for-payment-module-refactor ticket.',
   'Image: data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
   'See https://example.com/docs?page=2&sort=asc#section and git@github.com:org/repo.git',
@@ -179,6 +189,9 @@ const NORMAL = [
   'API_TOKEN=${API_TOKEN} and DB_PASSWORD="${DB_PASSWORD}"',
   'password: ${{ secrets.DB_PASSWORD }}',
   'set API_TOKEN=%API_TOKEN%',
+  'api_token=$API_TOKEN and api_token=$(cat token.txt) and API_TOKEN="$(cat token.txt)"',
+  'the token ' + rnd(40, HEX) + ' is in the log',
+  'Token rotation is documented in #14',
   'const token = await getToken();',
   'API_TOKEN = get_token()',
   'PWD=/home/dev/project',
@@ -208,6 +221,7 @@ test('assignments keep quotes, separators and following lines', () => {
   assert.equal(redact('DB_PASSWORD=hunter2\r\nPORT=3000'), 'DB_PASSWORD=[REDACTED]\r\nPORT=3000');
   assert.equal(redact('API_TOKEN="a\\"b" rest'), 'API_TOKEN="[REDACTED]" rest');
   assert.equal(redact('x `DB_PASSWORD=hunter2` y'), 'x `DB_PASSWORD=[REDACTED]` y');
+  assert.equal(redact('`DB_PASSWORD=x`'), '`DB_PASSWORD=[REDACTED]`');
   assert.equal(redact('Tokens: API_TOKEN=abc'), 'Tokens: API_TOKEN=[REDACTED]');
   assert.equal(redact('SECRET:\n  next line'), 'SECRET:\n  next line');
   assert.equal(redact('PASSWORD:   \nnext'), 'PASSWORD:   \nnext');
@@ -226,8 +240,8 @@ test('redaction is idempotent on random mixes of secrets, prose and syntax', () 
   const fragments = [
     '=', ':', ' = ', '"', "'", '`', '\n', ';', '&', ',', '@', '/', '-', '.', '$', '{', '(', '[', ']', '\\',
     'TOKEN', 'Tokens: ', 'SECRET=', 'password', 'db_password=', '--password=', 'sig=', 'AccountKey=', 'Authorization: ',
-    'Bearer ', 'basic ', 'https://u:', '@host/x', 'sk-', 'ghp_', 'eyJ', 'AKIA', 'AIza', '-----BEGIN ' + 'PRIVATE KEY-----\n',
-    '-----END ' + 'PRIVATE KEY-----', R, 'abc123', rnd(24), 'case ', 'export ',
+    'Bearer ', 'basic ', 'Token ', 'https://u:', '@host/x', 'sk-', 'sk-proj-', 'ghp_', 'eyJ', 'AKIA', 'AIza', '-----BEGIN ' + 'PRIVATE KEY-----\n',
+    '-----END ' + 'PRIVATE KEY-----', R, 'abc123', rnd(24), 'case ', 'export ', 'SECRET_KEY=', 'PORT=', ')&', '$', '%2B',
   ];
   const pieces = [...SECRETS.map(([, before, secret, after]) => before + secret + after), ...NORMAL, ...fragments];
   const separators = ['', '', ' ', '\n', ', ', '; ', '=', ':'];
@@ -246,11 +260,15 @@ test('redaction is idempotent on random mixes of secrets, prose and syntax', () 
 
 test('hostile inputs of 200,000 characters stay fast (linear-time rules)', () => {
   const units = ['-eyJ', 'A_TOKEN_', '-----BEGIN ' + 'PRIVATE KEY-----\n', 'ab://c:', '-password', 'token="', 'sk-'];
-  for (const unit of units) {
-    const input = unit.repeat(Math.ceil(200_000 / unit.length));
+  const inputs = [
+    ...units.map((unit) => unit.repeat(Math.ceil(200_000 / unit.length))),
+    'Bearer' + ' '.repeat(200_000) + 'x',
+    'Authorization:' + ' '.repeat(100_000) + 'Basic ' + ' '.repeat(100_000),
+  ];
+  for (const input of inputs) {
     const start = performance.now();
     redact(input);
     const ms = performance.now() - start;
-    assert.ok(ms < 1000, `${JSON.stringify(unit)} x ${input.length} chars took ${ms.toFixed(0)} ms`);
+    assert.ok(ms < 1000, `${JSON.stringify(input.slice(0, 20))}... (${input.length} chars) took ${ms.toFixed(0)} ms`);
   }
 });
