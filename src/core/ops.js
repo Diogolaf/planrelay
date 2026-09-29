@@ -709,8 +709,9 @@ export function postMessage(ctx, input) {
  * note per asker that lists them (§5), addressed to that asker; the note for the completer's own
  * questions is addressed to nobody, so an agent is never pinged about its own action. Each
  * dependent that no longer waits on any dependency gets a note:
- * "unblocked" (about: 'unblocked') when nothing else holds it back, otherwise that it still waits
- * for the human's approval or still has an open question. A dependency on a task that does not
+ * "unblocked" (about: 'unblocked') when nothing else holds it back; that it still has an open
+ * question (about: 'dependencies-done', which pings its holder like "unblocked" does, §5); or,
+ * in Backlog, that it still waits for the human's approval. A dependency on a task that does not
  * exist counts as satisfied (derive.blockers).
  * @param {Ctx} ctx
  */
@@ -750,7 +751,9 @@ export function completeTask(ctx, input) {
     if (open) {
       // no dependency holds it back any more, but a question still does: say so, and do not announce "unblocked"
       const questions = open === 1 ? 'an open question' : `${open} open questions`;
-      events.push(systemNote(other.id, `#${t.id} is done — #${other.id} no longer waits on dependencies, but still has ${questions}.`));
+      events.push(systemNote(other.id, `#${t.id} is done — #${other.id} no longer waits on dependencies, but still has ${questions}.`, {
+        about: 'dependencies-done',
+      }));
       continue;
     }
     unblocked.push(other.id);

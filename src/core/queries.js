@@ -59,6 +59,12 @@ const writtenBy = (reg, id, name) => displayName(name) ?? nameOf(reg, id);
 /** The same for a field that may be empty: null when neither an id nor a name was recorded. */
 const writtenByOrNull = (reg, id, name) => (id == null && displayName(name) === undefined ? null : writtenBy(reg, id, name));
 
+/** Who asked each question still in the message ring, for questions stored without the name. @returns {Map<string, unknown>} */
+const askersInRing = (state) => new Map(state.messages.filter((m) => m.kind === 'question').map((m) => [m.id, m.authorName]));
+
+/** An open question's asker, as history: the name stored with it, else its ring entry's, else nameOf. */
+const askerName = (reg, q, askers) => writtenBy(reg, q.author, displayName(q.authorName) ?? askers.get(q.id));
+
 /** The name of a task's current holder (see the module note); null when nobody holds it. */
 function holderName(reg, t) {
   if (!t.assignee) return null;
@@ -159,7 +165,8 @@ export function listTasks(state, reg, input) {
   if (changedSince !== undefined) rows = rows.filter((r) => r.t.updatedAt >= changedSince);
   if (text) {
     rows = rows.filter((r) =>
-      idMatch ? r.t.id === Number(idMatch[1]) : collapse(`${r.t.title} ${r.t.description} ${r.epic}`).toLowerCase().includes(text),
+      // normalized like the term: descriptions keep ZWNJ and ZWJ (Persian, emoji), which the term drops
+      idMatch ? r.t.id === Number(idMatch[1]) : collapse(dropInvisible(`${r.t.title} ${r.t.description} ${r.epic}`)).toLowerCase().includes(text),
     );
   }
   rows.sort((a, b) => COLUMNS.indexOf(a.column) - COLUMNS.indexOf(b.column)
@@ -201,13 +208,14 @@ export function getTask(state, reg, id, messages = []) {
   if (!t) return null;
   const all = Object.values(state.tasks);
   const column = columnOf(t, state.tasks);
+  const askers = askersInRing(state);
   return {
     ...copyOf(t, TASK_FIELDS),
     createdByName: writtenBy(reg, t.createdBy, t.createdByName),
     requestedViaName: writtenByOrNull(reg, t.requestedVia, t.requestedViaName),
     assigneeName: holderName(reg, t),
     completedByName: writtenByOrNull(reg, t.completedBy, t.completedByName),
-    openQuestions: t.openQuestions.map((q) => copyOf(q, QUESTION_FIELDS)),
+    openQuestions: t.openQuestions.map((q) => ({ ...copyOf(q, QUESTION_FIELDS), authorName: askerName(reg, q, askers) })),
     column,
     epicPath: epicPath(t, state.tasks),
     blockers: column === 'blocked' ? blockers(t, state.tasks) : [],
@@ -228,9 +236,12 @@ export function getTask(state, reg, id, messages = []) {
  *   "Released Amber's claim …" after the task left it);
  * - news on a task it held when the news was posted (the ring entry's holder), even if it has
  *   completed or released that task since. From another agent, any message; from the system, only
- *   "unblocked" notes (other system notes count only when addressed to it, above), so the takeover
- *   and inherit notes never ping the new holder;
- * - mentions of the task it holds now.
+ *   the notes that its dependencies are done: "unblocked" (reason 'unblocked'), and
+ *   'dependencies-done' when an open question still holds it back (reason 'update'). Other system
+ *   notes count only when addressed to it (above), so the takeover and inherit notes never ping
+ *   the new holder;
+ * - mentions of the task it holds now. Mentions follow the current claim, not the holder at
+ *   posting time: a mention posted during a turn that ends with complete or release is not pinged.
  * Its own messages never count.
  *
  * Which messages: those committed after `afterSeq`, the agent's cursor: a board sequence number,
@@ -274,6 +285,7 @@ export function whatsNew(state, reg, agentId, options = {}) {
     else if (m.holder === agentId) {
       if (m.author !== 'system') reason = 'update';
       else if (m.about === 'unblocked') reason = 'unblocked';
+      else if (m.about === 'dependencies-done') reason = 'update';
     } else if (mine && m.mentions.includes(mine.id)) reason = 'mention';
     if (reason) items.push({ reason, message: copyOf(m, RING_FIELDS), authorName: writtenBy(reg, m.author, m.authorName) });
   }
@@ -295,8 +307,7 @@ export function whatsNew(state, reg, agentId, options = {}) {
  * @param {number} now
  */
 export function needsHuman(state, reg, cfg, now) {
-  /** Who asked each question still in the message ring, for questions stored without the name. */
-  const askers = new Map(state.messages.filter((m) => m.kind === 'question').map((m) => [m.id, m.authorName]));
+  const askers = askersInRing(state);
   /** @type {{ taskId: number, title: string, question: import('./reduce.js').OpenQuestion, askedBy: string }[]} */
   const questions = [];
   /** @type {{ id: number, title: string, suggestedBy: string }[]} */
@@ -307,7 +318,7 @@ export function needsHuman(state, reg, cfg, now) {
     if (t.done) continue;
     for (const q of t.openQuestions) {
       if (q.to !== 'human') continue;
-      const askedBy = writtenBy(reg, q.author, displayName(q.authorName) ?? askers.get(q.id));
+      const askedBy = askerName(reg, q, askers);
       questions.push({ taskId: t.id, title: t.title, question: copyOf(q, QUESTION_FIELDS), askedBy });
     }
     if (t.kind === 'task' && !t.approved && t.origin === 'agent') {

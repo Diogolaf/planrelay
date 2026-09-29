@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { endAgent, nameOf, touchAgent } from '../../src/core/agents.js';
 import { DEFAULTS } from '../../src/core/config.js';
 import { inheritClaim, maintenance } from '../../src/core/maintenance.js';
-import { BoardError, claimTask, completeTask, createTask, postMessage, releaseTask } from '../../src/core/ops.js';
+import { BoardError, claimTask, completeTask, createTask, postMessage, releaseTask, updateTask } from '../../src/core/ops.js';
 import { boardCounts, listTasks, getTask, whatsNew, needsHuman } from '../../src/core/queries.js';
 import { MESSAGE_RING } from '../../src/core/reduce.js';
 import { ctxWith, apply } from './ops-helpers.js';
@@ -248,6 +248,23 @@ test('label and text filters drop invisible characters the way ops does before s
   assert.deepEqual(ids({ label: ZWSP }), [1]); // nothing visible: no filter
 });
 
+test('text search normalizes what it searches like the search term, so words with ZWNJ or ZWJ in a description are found as typed', () => {
+  /** Characters by code point, so this source holds no invisible characters (or escapes a tool could decode). */
+  const ch = (...cps) => String.fromCodePoint(...cps);
+  const ZWNJ = ch(0x200c);
+  const persian = `${ch(0x0645, 0x06cc)}${ZWNJ}${ch(0x062e, 0x0648, 0x0627, 0x0647, 0x0645)}`; // a Persian word, written with a ZWNJ
+  const technologist = ch(0x1f469, 0x200d, 0x1f4bb); // two emoji joined by a ZWJ
+  const ctx = ctxWith();
+  apply(ctx, createTask(ctx, { title: 'Profile page', description: `Owner: the ${technologist} team.\nNote: ${persian}` }));
+  apply(ctx, createTask(ctx, { title: `Search ${persian}` }));
+  const { description } = ctx.state.tasks[1];
+  assert.ok(description.includes(ZWNJ) && description.includes(ch(0x200d))); // multi-line text keeps both
+  const ids = (text) => listTasks(ctx.state, ctx.reg, { text }).items.map((i) => i.id);
+  assert.deepEqual(ids(persian), [1, 2]); // in the description (ZWNJ kept) and in the title (ZWNJ dropped)
+  assert.deepEqual(ids(technologist), [1]);
+  assert.deepEqual(ids(`the ${technologist} team. note`), [1]); // across the line break
+});
+
 test('label and text filters are forgiving about case and spacing', () => {
   const ctx = ctxWith({
     tasks: [
@@ -399,6 +416,41 @@ test('news on a task reaches the agent that held it when it was posted, even aft
       assert.deepEqual(whatsNew(ctx.state, ctx.reg, 'a1', { afterSeq: cursor }).items.length, 1);
     }
   }
+});
+
+test('the holder is pinged when its task no longer waits on dependencies but still has an open question (§5)', () => {
+  const ctx = ctxWith({ tasks: [{ id: 1, title: 'Recipe API', assignee: 'a2' }, { id: 3, title: 'Vegetarian filter', assignee: 'a1' }] });
+  const jade = { ...ctx, agentId: 'a2' };
+  apply(ctx, updateTask(ctx, { id: 3, addDependsOn: [1] })); // a dependency added after Amber claimed #3
+  apply(ctx, postMessage(jade, { taskId: 3, kind: 'question', to: 'human', text: 'Keep the old units?' }));
+  const cursor = ctx.state.seq;
+  apply(ctx, completeTask(jade, { id: 1, summary: 'Shipped.' }));
+  assert.deepEqual(whatsNew(ctx.state, ctx.reg, 'a1', { afterSeq: cursor }).items.map((i) => [i.reason, i.message.about, i.message.text]), [
+    ['update', 'dependencies-done', '#1 is done — #3 no longer waits on dependencies, but still has an open question.'],
+  ]);
+  // the activity feed records it as its own kind
+  assert.deepEqual(ctx.state.recent.filter((a) => a.type === 'dependencies-done').map((a) => a.taskId), [3]);
+});
+
+test("getTask names every open question's asker, with the same fallback as the other names", () => {
+  const ctx = ctxWith({
+    tasks: [{
+      id: 1,
+      title: 'Vegetarian filter',
+      openQuestions: [
+        { id: 'm1', to: 'human', author: 'a2', at: T0, text: 'Oven time?' }, // stored before questions kept names
+        { id: 'm2', to: 'any', author: 'gone-long-ago', at: T0, text: 'Which API?' },
+      ],
+    }, { id: 2, title: 'Password reset' }],
+  });
+  const view = getTask(ctx.state, ctx.reg, 1, [{ id: 'm1', author: 'a2', kind: 'question', text: 'Oven time?' }]);
+  assert.deepEqual(view.openQuestions.map((q) => q.authorName), ['Jade', 'an earlier agent']);
+  assert.equal(view.openQuestions[0].authorName, view.messages[0].authorName);
+  // no name stored with the question, and the registry forgot the asker: the ring entry still has it
+  apply(ctx, postMessage({ ...ctx, agentId: 'a2' }, { taskId: 2, kind: 'question', to: 'human', text: 'Email or SMS?' }));
+  delete ctx.state.tasks[2].openQuestions[0].authorName;
+  delete ctx.reg.agents.a2;
+  assert.equal(getTask(ctx.state, ctx.reg, 2, []).openQuestions[0].authorName, 'Jade');
 });
 
 test('the agent that inherits a claim is not pinged by the inherit note, which is applied before the claim', () => {

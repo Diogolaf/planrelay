@@ -241,6 +241,7 @@ function applyMessage(state, m, seq, at, log) {
     },
     MESSAGE_RING,
   );
+  // a system note with an `about` is its own activity kind: 'unblocked', 'dependencies-done' (ops.completeTask)
   const activity = m.kind === 'question' ? 'question' : m.kind === 'answer' ? 'answer' : m.kind === 'system' ? about : null;
   if (activity) log(activity, task.id, m.text);
   return state;

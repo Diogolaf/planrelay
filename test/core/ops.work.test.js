@@ -394,9 +394,9 @@ test('a dependent with an open question is not announced as unblocked', () => {
   assert.deepEqual(out.result, { id: 1, unblocked: [3, 6] });
   const notes = out.events.filter((e) => e.data.message?.kind === 'system').map((e) => e.data.message);
   assert.deepEqual(notes.map((m) => [m.taskId, m.about ?? null, m.text]), [
-    [2, null, '#1 is done — #2 no longer waits on dependencies, but still has an open question.'],
+    [2, 'dependencies-done', '#1 is done — #2 no longer waits on dependencies, but still has an open question.'],
     [3, 'unblocked', '#1 is done — #3 is unblocked.'],
-    [4, null, '#1 is done — #4 no longer waits on dependencies, but still has 2 open questions.'],
+    [4, 'dependencies-done', '#1 is done — #4 no longer waits on dependencies, but still has 2 open questions.'],
     [6, 'unblocked', '#1 is done — #6 is unblocked.'],
   ]);
   assert.equal(columnOf(ctx.state.tasks[2], ctx.state.tasks), 'blocked');
