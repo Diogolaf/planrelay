@@ -1,10 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { applyEvent, emptyState, RECENT_LIMIT, MESSAGE_RING } from '../../src/core/reduce.js';
+import {
+  applyEvent, emptyState, isEvent, newTask, snippet, FILES_LIMIT, RECENT_LIMIT, MESSAGE_RING,
+} from '../../src/core/reduce.js';
 import { T0 } from '../helpers.js';
 
 let seq = 0;
 const ev = (type, data, actor = 'a1') => ({ seq: ++seq, at: T0 + seq, type, actor, data });
+/** An event as it comes back from the log, where JSON.parse makes "__proto__" an own key. */
+const raw = (type, dataJson) => JSON.parse(`{"seq":${++seq},"at":${T0 + seq},"type":"${type}","actor":"a1","data":${dataJson}}`);
 const created = (id, extra = {}) =>
   ev('task.created', { task: { id, kind: 'task', title: `Task ${id}`, origin: 'human', createdBy: 'human', approved: true, rank: id, ...extra } });
 const msg = (id, taskId, kind, extra = {}) =>
@@ -101,4 +105,280 @@ test('rings are bounded', () => {
   for (let i = 0; i < RECENT_LIMIT + 10; i++) applyEvent(s, msg(`q${i}`, 1, 'question'));
   assert.equal(s.recent.length, RECENT_LIMIT);
   assert.equal(s.messages.length, MESSAGE_RING);
+});
+
+test('isEvent accepts plain objects with a string type and a safe seq of 1 or more', () => {
+  assert.equal(isEvent({ seq: 1, type: 'x' }), true);
+  for (const bad of [
+    null, 42, 'task.created', [], {}, { type: 'x' }, { seq: 1 }, { seq: 1, type: 7 }, { seq: 0, type: 'x' },
+    { seq: -1, type: 'x' }, { seq: 1.5, type: 'x' }, { seq: '1', type: 'x' }, { seq: 2 ** 53, type: 'x' },
+  ]) assert.equal(isEvent(bad), false, JSON.stringify(bad));
+});
+
+test('seq only moves up, and never on things that are not events', () => {
+  const s = emptyState();
+  applyEvent(s, { ...created(1), seq: 10 });
+  assert.equal(s.seq, 10);
+  applyEvent(s, { ...created(2), seq: 3 }); // applied, but seq does not go back
+  assert.equal(s.seq, 10);
+  assert.ok(s.tasks[2]);
+  for (const bad of [null, 42, [], { type: 'task.created' }, { seq: 99, type: 5 }, { seq: 2 ** 53, type: 'x' }]) {
+    applyEvent(s, /** @type {any} */ (bad));
+  }
+  assert.equal(s.seq, 10);
+  applyEvent(s, { ...ev('something.new', {}), seq: 11 }); // unknown types still advance seq
+  assert.equal(s.seq, 11);
+});
+
+test('summary becomes lastHandoff with kind summary; lastHandoff keeps only a snippet', () => {
+  const s = board(created(1));
+  applyEvent(s, msg('m1', 1, 'summary', { text: 'Built the filter.' }));
+  assert.deepEqual(s.tasks[1].lastHandoff, { author: 'a1', at: s.messages[0].at, kind: 'summary', text: 'Built the filter.' });
+  applyEvent(s, msg('m2', 1, 'handoff', { text: `Next:\n\n${'x'.repeat(5000)}` }));
+  assert.equal(s.tasks[1].lastHandoff.kind, 'handoff');
+  assert.ok(s.tasks[1].lastHandoff.text.length <= 280);
+  assert.ok(s.tasks[1].lastHandoff.text.startsWith('Next: xxx'));
+});
+
+test('releases: manual or unknown reasons log released, folder-missing and timeout log auto-released', () => {
+  const s = board(created(1));
+  for (const reason of ['manual', 'folder-missing', 'timeout', undefined, 'other']) {
+    applyEvent(s, ev('task.claimed', { id: 1, agent: 'a1', folder: '/w' }));
+    applyEvent(s, ev('task.released', { id: 1, reason }, 'system'));
+  }
+  assert.deepEqual(s.recent.filter((r) => r.type.endsWith('released')).map((r) => r.type), [
+    'released', 'auto-released', 'auto-released', 'released', 'released',
+  ]);
+});
+
+test('completion clears open questions; approved: false logs nothing', () => {
+  const s = board(created(1));
+  applyEvent(s, msg('m1', 1, 'question', { to: 'human' }));
+  applyEvent(s, ev('task.approved', { id: 1, approved: false }));
+  assert.equal(s.tasks[1].approved, false);
+  assert.equal(s.recent.at(-1).type, 'question');
+  applyEvent(s, ev('task.completed', { id: 1, summary: 'Done.' }));
+  assert.deepEqual(s.tasks[1].openQuestions, []);
+  assert.equal(s.recent.at(-1).type, 'completed');
+});
+
+test('comments and handoffs are kept as headers but log no activity', () => {
+  const s = board(created(1));
+  applyEvent(s, msg('m1', 1, 'comment'));
+  applyEvent(s, msg('m2', 1, 'handoff'));
+  assert.deepEqual(s.recent.map((r) => r.type), ['created']);
+  assert.deepEqual(s.messages.map((m) => m.kind), ['comment', 'handoff']);
+  assert.equal(s.tasks[1].messageCount, 2);
+});
+
+test('an answer to an unknown question id has no replyToAuthor and closes nothing', () => {
+  const s = board(created(1));
+  applyEvent(s, msg('m1', 1, 'question'));
+  applyEvent(s, msg('m2', 1, 'answer', { replyTo: 'nope' }));
+  assert.equal(s.messages.at(-1).replyToAuthor, null);
+  assert.deepEqual(s.tasks[1].openQuestions.map((q) => q.id), ['m1']);
+});
+
+test('a question without "to" is addressed to any, in the task and in the header', () => {
+  const s = board(created(1));
+  applyEvent(s, msg('m1', 1, 'question'));
+  assert.equal(s.tasks[1].openQuestions[0].to, 'any');
+  assert.equal(s.messages[0].to, 'any');
+  applyEvent(s, msg('m2', 1, 'comment'));
+  assert.equal(s.messages[1].to, null);
+});
+
+test('a message for an unknown task changes nothing', () => {
+  const s = board(created(1));
+  const before = JSON.stringify({ ...s, seq: 0 });
+  applyEvent(s, msg('m1', 99, 'question'));
+  assert.equal(JSON.stringify({ ...s, seq: 0 }), before);
+});
+
+test('malformed events change nothing and never throw', () => {
+  const s = board(created(1));
+  const snapshot = () => JSON.stringify({ ...s, seq: 0 });
+  const before = snapshot();
+  const malformed = [
+    null, 42, [], 'text',
+    { seq: ++seq, at: T0, type: 'message.posted', actor: 'a1' }, // no data
+    { seq: ++seq, at: T0, type: 'task.claimed', actor: 'a1', data: null },
+    ev('message.posted', {}), // no message
+    ev('message.posted', { message: 'hello' }),
+    ev('task.checklist', { id: 1, items: 'abc' }),
+    ev('task.checklist', { id: 1 }),
+    ev('task.claimed', { id: 1 }), // no agent
+    ev('task.claimed', { id: 1, agent: 7 }),
+    ev('task.file', { id: 1 }), // no path
+    ev('task.file', { id: 1, path: ['a'] }),
+    ev('task.completed', { id: '1', summary: 'x' }),
+    ev('task.completed', { id: 1.5, summary: 'x' }),
+    ev('task.updated', { id: 1, changes: 'abc' }), // last: it only touches updatedAt
+  ];
+  for (const e of malformed) applyEvent(s, /** @type {any} */ (e));
+  assert.equal(s.tasks[1].updatedAt, T0 + seq);
+  s.tasks[1].updatedAt = s.tasks[1].createdAt;
+  assert.equal(snapshot(), before);
+});
+
+test('taskId "__proto__", "constructor" and "1" match no task and pollute nothing', () => {
+  const s = board(created(1));
+  for (const taskId of ['"__proto__"', '"constructor"', '"toString"', '"1"']) {
+    for (const kind of ['question', 'handoff', 'comment']) {
+      applyEvent(s, raw('message.posted', `{"message":{"id":"m","taskId":${taskId},"author":"a1","kind":"${kind}","text":"hi"}}`));
+    }
+    applyEvent(s, raw('message.posted', `{"message":{"id":"m","taskId":${taskId},"author":"system","kind":"system","closesQuestions":true,"text":"hi"}}`));
+    applyEvent(s, raw('task.completed', `{"id":${taskId},"summary":"x"}`));
+    applyEvent(s, raw('task.updated', `{"id":${taskId},"changes":{"title":"x"}}`));
+  }
+  assert.deepEqual(s.messages, []);
+  assert.equal(s.tasks[1].messageCount, 0);
+  assert.equal(s.tasks[1].done, false);
+  for (const probe of [{}, [], Object, Object.prototype]) {
+    for (const k of ['messageCount', 'updatedAt', 'openQuestions', 'lastHandoff', 'done', 'title']) {
+      assert.equal(Object.hasOwn(probe, k), false, k);
+    }
+  }
+  assert.equal(/** @type {any} */ ({}).messageCount, undefined);
+});
+
+test('task.updated changes only editable fields', () => {
+  const s = board(created(1));
+  const changes = {
+    id: 99, done: true, assignee: 'x', openQuestions: null, checklist: 'abc', messageCount: 'n', approved: false,
+    title: 'Renamed', rank: 5, dependsOn: [2], labels: 'not-a-list',
+  };
+  applyEvent(s, raw('task.updated', `{"id":1,"changes":{"__proto__":{"polluted":true},${JSON.stringify(changes).slice(1)}}`));
+  const t = s.tasks[1];
+  assert.equal(t.id, 1);
+  assert.equal(t.done, false);
+  assert.equal(t.assignee, null);
+  assert.deepEqual(t.openQuestions, []);
+  assert.deepEqual(t.checklist, []);
+  assert.equal(t.messageCount, 0);
+  assert.equal(t.approved, true);
+  assert.equal(t.title, 'Renamed');
+  assert.equal(t.rank, 5);
+  assert.deepEqual(t.dependsOn, [2]);
+  assert.deepEqual(t.labels, []); // a non-list is ignored
+  assert.equal(/** @type {any} */ (t).polluted, undefined);
+  assert.equal(Object.hasOwn(t, '__proto__'), false);
+  assert.deepEqual(Object.keys(s.tasks), ['1']);
+  applyEvent(s, ev('task.updated', { id: 1, changes: { title: undefined, description: 'Kept' } }));
+  assert.equal(t.title, 'Renamed');
+  assert.equal(t.description, 'Kept');
+});
+
+test('task.created needs a new safe integer id; a duplicate keeps the first task', () => {
+  const s = emptyState();
+  for (const id of [0, -3, 1.5, '5', null, 2 ** 53, 1e308]) applyEvent(s, ev('task.created', { task: { id, title: 'x' } }));
+  applyEvent(s, raw('task.created', '{"task":{"id":"__proto__","title":"x"}}'));
+  applyEvent(s, ev('task.created', { task: { title: 'no id' } }));
+  applyEvent(s, ev('task.created', {}));
+  applyEvent(s, ev('task.created', { task: 'text' }));
+  assert.deepEqual(s.tasks, {});
+  assert.equal(s.nextId, 1);
+  assert.deepEqual(s.recent, []);
+  assert.equal(Object.getPrototypeOf(s.tasks), Object.prototype);
+
+  applyEvent(s, created(1));
+  applyEvent(s, ev('task.completed', { id: 1, summary: 'Done.' }));
+  applyEvent(s, created(1, { title: 'Duplicate' }));
+  assert.equal(s.tasks[1].title, 'Task 1');
+  assert.equal(s.tasks[1].done, true);
+  assert.deepEqual(s.recent.map((r) => r.type), ['created', 'completed']);
+});
+
+test('task.created drops unknown and undefined fields and repairs lists and counters', () => {
+  const s = emptyState();
+  const task = {
+    id: 1, title: 'T', labels: 'bug', dependsOn: null, links: {}, checklist: 'x', files: 3, openQuestions: {},
+    messageCount: 'n', filesMore: -1, extra: 'junk',
+  };
+  applyEvent(s, raw('task.created', `{"task":{"__proto__":{"polluted":true},${JSON.stringify(task).slice(1)}}`));
+  applyEvent(s, ev('task.created', { task: { id: 2, title: 'U', description: undefined, parent: undefined } }));
+  const t = s.tasks[1];
+  for (const k of ['labels', 'dependsOn', 'links', 'checklist', 'files', 'openQuestions']) assert.deepEqual(t[k], [], k);
+  assert.equal(t.messageCount, 0);
+  assert.equal(t.filesMore, 0);
+  assert.equal(Object.hasOwn(t, 'extra'), false);
+  assert.equal(Object.hasOwn(t, '__proto__'), false);
+  assert.equal(/** @type {any} */ (t).polluted, undefined);
+  const at = s.tasks[2].createdAt;
+  assert.deepEqual(s.tasks[2], newTask({ id: 2, title: 'U', createdAt: at, updatedAt: at }));
+  applyEvent(s, msg('m1', 1, 'comment'));
+  assert.equal(t.messageCount, 1);
+});
+
+test('checklist items must be objects with a string text', () => {
+  const s = board(created(1));
+  const items = [null, 'A', { text: 5, done: true }, { done: true }, { text: 'B', done: 1 }, { text: 'C' }];
+  applyEvent(s, ev('task.checklist', { id: 1, items }));
+  assert.deepEqual(s.tasks[1].checklist, [{ text: 'B', done: true }, { text: 'C', done: false }]);
+  assert.deepEqual(s.recent.filter((r) => r.type === 'checked').map((r) => r.text), ['B']);
+});
+
+test('claims need a string agent; a missing folder is stored as null', () => {
+  const s = board(created(1));
+  applyEvent(s, ev('task.claimed', { id: 1, agent: 'a1' }));
+  assert.deepEqual(s.tasks[1].claim, { folder: null, since: s.recent.at(-1).at });
+  assert.equal(s.tasks[1].assignee, 'a1');
+});
+
+test('task files are capped; later first touches are only counted', () => {
+  const s = board(created(1));
+  for (let i = 0; i < FILES_LIMIT + 5; i++) applyEvent(s, ev('task.file', { id: 1, path: `src/f${i}.js`, by: 'a1' }));
+  applyEvent(s, ev('task.file', { id: 1, path: 'src/f0.js', by: 'a1' })); // already listed
+  assert.equal(s.tasks[1].files.length, FILES_LIMIT);
+  assert.equal(s.tasks[1].filesMore, 5);
+  assert.equal(s.tasks[1].files.at(-1).path, `src/f${FILES_LIMIT - 1}.js`);
+});
+
+test('snippet collapses whitespace, stays within 280 characters and never splits an emoji', () => {
+  const emoji = String.fromCodePoint(0x1f600);
+  assert.equal(snippet('  a \n\t b  '), 'a b');
+  assert.equal(snippet(null), '');
+  const cut = snippet(`${'a'.repeat(278)}${emoji}${'b'.repeat(10)}`); // the emoji straddles the cut
+  assert.ok(cut.isWellFormed());
+  assert.equal(cut, `${'a'.repeat(278)}…`);
+  const kept = snippet(`${'a'.repeat(277)}${emoji}${'b'.repeat(10)}`); // the emoji fits
+  assert.equal(kept, `${'a'.repeat(277)}${emoji}…`);
+  assert.equal(kept.length, 280);
+  assert.equal(snippet('x'.repeat(280)), 'x'.repeat(280));
+});
+
+test('a snapshot kept up to date event by event equals a fresh replay of the log', () => {
+  const events = [
+    created(1), created(2, { origin: 'agent', createdBy: 'a2', approved: false, labels: ['bug'] }),
+    created(3, { kind: 'epic', description: undefined, dependsOn: undefined }),
+    ev('task.updated', { id: 2, changes: { parent: 3, title: undefined, links: [{ title: 'Spec', target: 'docs/x.md' }] } }),
+    ev('task.approved', { id: 2, approved: true }),
+    ev('task.claimed', { id: 1, agent: 'a1', folder: undefined }),
+    ev('task.file', { id: 1, path: 'src/a.js', by: undefined }),
+    ev('task.checklist', { id: 1, items: [{ text: 'A', done: true }, { text: 'B' }] }),
+    msg('m1', 1, 'question', { to: undefined }),
+    msg('m2', 1, 'answer', { replyTo: 'm1', author: 'a2', mentions: undefined }),
+    msg('m3', 1, 'question', { to: 'human' }),
+    msg('m4', 1, 'handoff', { about: undefined }),
+    msg('m5', 2, 'comment', { id: undefined, author: undefined, kind: undefined }),
+    ev('task.released', { id: 1, reason: 'manual' }),
+    ev('task.claimed', { id: 1, agent: 'a2', folder: '/w' }, 'a2'),
+    msg('m6', 1, 'summary', { text: `Done ${String.fromCodePoint(0x1f600)}` }),
+    { ...ev('task.completed', { id: 1, summary: undefined }), actor: undefined },
+    msg('m7', 2, 'system', { author: 'system', about: 'unblocked', closesQuestions: true, text: '#1 is done.' }),
+    { seq: ++seq, type: 'task.file', data: { id: 2, path: 'src/b.js' } }, // no at, no actor
+    null, { type: 'task.created' }, created(1, { title: 'Duplicate' }), ev('future.type', { id: 1 }),
+  ];
+  const log = events.map((e) => JSON.stringify(e)).join('\n');
+
+  let incremental = emptyState();
+  for (const e of events) incremental = JSON.parse(JSON.stringify(applyEvent(incremental, /** @type {any} */ (e))));
+  const replayed = emptyState();
+  for (const line of log.split('\n')) applyEvent(replayed, JSON.parse(line));
+
+  assert.deepStrictEqual(incremental, replayed);
+  assert.equal(replayed.tasks[1].summary, null);
+  assert.equal(replayed.tasks[1].completedBy, null);
+  assert.equal(replayed.seq, seq);
+  assert.equal(replayed.tasks[2].files[0].at, null);
 });
