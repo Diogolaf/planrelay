@@ -4,10 +4,10 @@ import { endAgent } from '../../src/core/agents.js';
 import { columnOf } from '../../src/core/derive.js';
 import { FILES_LIMIT } from '../../src/core/reduce.js';
 import {
-  BoardError, claimTask, postMessage, completeTask, releaseTask, syncChecklist, touchTaskFile, claimedBy,
+  BoardError, claimTask, postMessage, completeTask, releaseTask, syncChecklist, touchTaskFile, claimedBy, updateTask,
 } from '../../src/core/ops.js';
 import { ctxWith, apply } from './ops-helpers.js';
-import { HOUR } from '../helpers.js';
+import { HOUR, T0 } from '../helpers.js';
 
 // An invented token, built by concatenation so scanners never see a whole one in the source.
 const TOKEN = 'gh' + 'p_' + 'Z'.repeat(36);
@@ -474,4 +474,20 @@ test('file mirroring stops at FILES_LIMIT and ignores paths that are not text', 
     { type: 'task.file', actor: 'a1', data: { id: 1, path: 'src/new.js', by: 'a1' } },
   ]);
   for (const p of ['', null, undefined, 5, ['src/a.js']]) assert.deepEqual(touchTaskFile(ctx, p).events, [], String(p));
+});
+
+test('refusals never show a registry name that is not usable text: the name stored with the claim, else "another agent"', () => {
+  const ctx = ctxWith({ tasks: [{ id: 1, assignee: 'a2', assigneeName: 'Jade' }] });
+  const a2 = /** @type {any} */ (ctx.reg.agents.a2);
+  a2.name = { first: 'Jade' }; // a hand-edited agents.json: the registry reader keeps the agent
+  refuses(() => claimTask(ctx, { id: 1 }), /^#1 is claimed by Jade\. Ask them on the board or pick another task\.$/);
+  a2.name = '';
+  refuses(() => completeTask(ctx, { id: 1, summary: 'Shipped.' }), /^#1 is claimed by Jade; only they can complete it\.$/);
+  ctx.state.tasks[1].assigneeName = null;
+  refuses(() => releaseTask(ctx, { id: 1, note: 'Stopping.' }), /^#1 is claimed by another agent; only they can release it\.$/);
+  refuses(() => updateTask(ctx, { id: 1, approved: false }), /^#1 is claimed by another agent; ask them to release it first\.$/);
+  endAgent(ctx.reg, 'a2', T0);
+  refuses(() => claimTask(ctx, { id: 1 }), /^#1 is held by a session that has ended; pass takeOver: true only if the human asked you to continue it\.$/);
+  const out = claimTask(ctx, { id: 1, takeOver: true });
+  assert.equal(out.events[0].data.message.text, 'Amber took over from a session that had ended.');
 });

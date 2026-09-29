@@ -7,8 +7,12 @@ import {
   openBoard, transact, readState, readMessages, readRegistry, repair, replay, messagesFile,
 } from '../../src/core/store.js';
 import { samePath } from '../../src/core/paths.js';
+import { touchAgent } from '../../src/core/agents.js';
+import { DEFAULTS } from '../../src/core/config.js';
+import { maintenance } from '../../src/core/maintenance.js';
+import { whatsNew } from '../../src/core/queries.js';
 import { SCHEMA } from '../../src/core/reduce.js';
-import { tempRepo, T0 } from '../helpers.js';
+import { tempRepo, T0, MIN, HOUR } from '../helpers.js';
 
 const createEv = (id, title = `Task ${id}`) => ({
   type: 'task.created', actor: 'a1',
@@ -282,8 +286,93 @@ test('the registry is written before the append, and a failed registry write com
     return { events: [createEv(2)], registry: reg };
   }), /append failed/);
   t.mock.restoreAll();
-  assert.equal(readRegistry(b).agents.z.id, 'z'); // written first; harmless without the events
+  assert.equal(Object.hasOwn(readRegistry(b).agents, 'z'), false); // written first, then rolled back
   assert.equal(fs.readFileSync(b.files.events, 'utf8'), before);
+});
+
+/** Makes every append to the board's event log fail; other appends (errors.log) go through. */
+function failAppends(t, b) {
+  const original = fs.appendFileSync;
+  t.mock.method(fs, 'appendFileSync', (file, ...rest) => {
+    if (file === b.files.events) throw Object.assign(new Error('append failed (test)'), { code: 'EIO' });
+    return original.call(fs, file, ...rest);
+  });
+}
+
+test('a failed append rolls the registry back to its exact previous content, so nothing in it is ahead of the log', (t) => {
+  const b = openBoard(tempRepo());
+  transact(b, (s, reg) => {
+    reg.agents.a1 = { id: 'a1', name: 'Amber', cursor: 0 };
+    return { events: [createEv(1)], registry: reg };
+  });
+  fs.appendFileSync(b.files.agents, '\n'); // byte for byte: even formatting this process would not write is kept
+  const registryBefore = fs.readFileSync(b.files.agents);
+  const logBefore = fs.readFileSync(b.files.events);
+  failAppends(t, b);
+  assert.throws(() => transact(b, (s, reg) => {
+    reg.agents.a1.cursor = s.seq + 1; // as a hook advancing the cursor past this write's own events
+    reg.agents.z = { id: 'z' };
+    return { events: [createEv(2)], registry: reg };
+  }, { before: (s, reg) => { reg.activity[1] = T0; } }), /^Error: append failed \(test\)$/);
+  t.mock.restoreAll();
+  assert.deepEqual(fs.readFileSync(b.files.agents), registryBefore);
+  assert.deepEqual(fs.readFileSync(b.files.events), logBefore);
+  // a board that had no registry file before the failed write has none after it
+  const fresh = openBoard(tempRepo());
+  failAppends(t, fresh);
+  assert.throws(() => transact(fresh, (s, reg) => ({ events: [createEv(1)], registry: reg })), /append failed/);
+  t.mock.restoreAll();
+  assert.equal(fs.existsSync(fresh.files.agents), false);
+});
+
+test('if the registry cannot be restored, that is logged and the append error is still the one thrown', (t) => {
+  const b = openBoard(tempRepo());
+  transact(b, (s, reg) => ({ events: [createEv(1)], registry: reg }));
+  failAppends(t, b);
+  const originalWrite = fs.writeFileSync;
+  let registryWrites = 0;
+  t.mock.method(fs, 'writeFileSync', (file, ...rest) => {
+    if (String(file).startsWith(b.files.agents) && ++registryWrites > 1) {
+      throw Object.assign(new Error('restore failed (test)'), { code: 'ENOSPC' });
+    }
+    return originalWrite.call(fs, file, ...rest);
+  });
+  assert.throws(() => transact(b, (s, reg) => ({ events: [createEv(2)], registry: reg })), /^Error: append failed \(test\)$/);
+  t.mock.restoreAll();
+  assert.equal(registryWrites, 2);
+  assert.match(fs.readFileSync(b.files.errors, 'utf8'), /restoring the registry after a failed append: Error: restore failed \(test\)/);
+});
+
+test('after a failed prompt write, the next prompt still pings what housekeeping regenerates (the cursor was rolled back)', (t) => {
+  const b = openBoard(tempRepo());
+  const io = { host: 'test-host', missing: () => false, alive: () => true };
+  // Amber registers and claims #1
+  transact(b, (s, reg) => {
+    touchAgent(reg, { id: 'a1', folder: '/w/a', seq: s.seq }, T0);
+    return {
+      events: [createEv(1), { type: 'task.claimed', actor: 'a1', data: { id: 1, agent: 'a1', agentName: 'Amber', folder: '/w/a' } }],
+      registry: reg,
+    };
+  }, { now: T0 });
+  /** A prompt as the hook runs it: housekeeping first, then pings since the cursor, then the cursor advances. */
+  const prompt = (now) => transact(b, (s, reg) => {
+    touchAgent(reg, { id: 'a1', seq: s.seq }, now);
+    const agent = reg.agents.a1;
+    const pings = whatsNew(s, reg, 'a1', { afterSeq: agent.cursor }).items.map((i) => i.message.text);
+    agent.prevCursor = agent.cursor;
+    agent.cursor = s.seq;
+    return { registry: reg, result: pings };
+  }, { now, before: (s, reg, at) => maintenance(s, reg, DEFAULTS, at, io) });
+  // Amber comes back after claimTimeoutHours: housekeeping releases her claim, but the append fails
+  failAppends(t, b);
+  assert.throws(() => prompt(T0 + 25 * HOUR), /append failed/);
+  t.mock.restoreAll();
+  assert.equal(readRegistry(b).agents.a1.cursor, 0); // as registered, not advanced past the release that never landed
+  // the next prompt: housekeeping writes the release again, under the same seqs, and Amber is told
+  const out = prompt(T0 + 25 * HOUR + MIN);
+  assert.deepEqual(out.result, ["Released Amber's claim after 24 h without activity."]);
+  assert.equal(readState(b).tasks[1].assignee, null);
+  assert.equal(readRegistry(b).agents.a1.cursor, out.state.seq);
 });
 
 test('a message file that cannot be written degrades writes but never blocks them', () => {

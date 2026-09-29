@@ -1,7 +1,7 @@
 import { getAgent } from './agents.js';
 import { blockers } from './derive.js';
 import { systemMessage } from './maintenance.js';
-import { FILES_LIMIT } from './reduce.js';
+import { displayName, FILES_LIMIT } from './reduce.js';
 import { redact } from './redact.js';
 
 /**
@@ -294,12 +294,16 @@ function getTask(ctx, value, field = 'id') {
 
 /**
  * The display name of the agent holding a task: the registry's current name, else the name stored
- * with the claim; null when neither knows it (the registry forgets ended agents after 7 days).
+ * with the claim; null when neither is usable text (the registry forgets ended agents after 7 days,
+ * and a hand-edited one can hold anything). Checked like the queries' holder names (displayName).
  * @returns {string | null}
  */
 function holderName(ctx, t) {
-  return getAgent(ctx.reg, t.assignee)?.name ?? t.assigneeName ?? null;
+  return displayName(getAgent(ctx.reg, t.assignee)?.name) ?? displayName(t.assigneeName) ?? null;
 }
+
+/** The name of a live holder for a refusal: "another agent" when no usable name is known. */
+const liveHolderName = (ctx, t) => holderName(ctx, t) ?? 'another agent';
 
 function checkParent(ctx, value, kind, selfId) {
   const p = getTask(ctx, value, 'parent');
@@ -510,7 +514,7 @@ export function updateTask(ctx, input) {
     if (t.done) fail(`#${t.id} is done; its approval no longer changes.`);
     if (!approved && t.assignee) {
       if (t.assignee === ctx.agentId) fail(`You hold #${t.id}; release it before moving it back to Backlog.`);
-      if (liveOwner(ctx, t)) fail(`#${t.id} is claimed by ${holderName(ctx, t)}; ask them to release it first.`);
+      if (liveOwner(ctx, t)) fail(`#${t.id} is claimed by ${liveHolderName(ctx, t)}; ask them to release it first.`);
       // the holder's session has ended (or the registry no longer knows it): nobody can be asked
       fail(`#${t.id} is ${endedHolder(ctx, t)}; it is released automatically after ${ctx.cfg.claimTimeoutHours} h without activity, `
         + 'or the human can ask you to take it over.');
@@ -598,7 +602,7 @@ export function claimTask(ctx, input) {
   if (t.assignee && t.assignee === ctx.agentId) return { events: [], result: { id: t.id } };
   const held = claimedBy(ctx.state, ctx.agentId);
   if (held) fail(`You already hold #${held.id} "${held.title}". Complete or release it first.`);
-  if (liveOwner(ctx, t)) fail(`#${t.id} is claimed by ${holderName(ctx, t)}. Ask them on the board or pick another task.`);
+  if (liveOwner(ctx, t)) fail(`#${t.id} is claimed by ${liveHolderName(ctx, t)}. Ask them on the board or pick another task.`);
   const former = t.assignee ? { id: t.assignee, name: holderName(ctx, t), folder: claimFolder(t) } : null;
   if (former && !takeOver) {
     const about = [former.name, former.folder && `folder ${former.folder}`].filter(Boolean).join(', ');
@@ -718,7 +722,7 @@ export function completeTask(ctx, input) {
   if (t.done) fail(`#${t.id} is already done.`);
   if (t.assignee !== ctx.agentId) {
     if (!t.assignee) fail(`Claim #${t.id} first (claim_task), then complete it.`);
-    if (liveOwner(ctx, t)) fail(`#${t.id} is claimed by ${holderName(ctx, t)}; only they can complete it.`);
+    if (liveOwner(ctx, t)) fail(`#${t.id} is claimed by ${liveHolderName(ctx, t)}; only they can complete it.`);
     fail(`#${t.id} is ${endedHolder(ctx, t)}; claim it with takeOver: true if the human asked, then complete it.`);
   }
   const summary = cleanText(given(f, 'summary'), 'summary');
@@ -767,7 +771,7 @@ export function releaseTask(ctx, input) {
   const t = getTask(ctx, given(f, 'id'));
   if (t.done) fail(`#${t.id} is done; there is nothing to release.`);
   if (!t.assignee) fail(`#${t.id} is not claimed; there is nothing to release.`);
-  if (liveOwner(ctx, t)) fail(`#${t.id} is claimed by ${holderName(ctx, t)}; only they can release it.`);
+  if (liveOwner(ctx, t)) fail(`#${t.id} is claimed by ${liveHolderName(ctx, t)}; only they can release it.`);
   const note = cleanText(given(f, 'note'), 'note');
   const events = [messageEvent(ctx, t.id, 'handoff', note)];
   if (t.assignee !== ctx.agentId) {

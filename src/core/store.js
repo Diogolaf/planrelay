@@ -475,6 +475,26 @@ function appendEvents(board, payload, sizeBefore) {
   }
 }
 
+/** A file's exact bytes ({ data: null } when it does not exist); any other read error is thrown. */
+function readRaw(file) {
+  try {
+    return { data: fs.readFileSync(file) };
+  } catch (err) {
+    if (/** @type {any} */ (err).code === 'ENOENT') return { data: null };
+    throw err;
+  }
+}
+
+/** Puts a file back as readRaw found it: the same bytes, or no file. Never throws; a failure is logged. */
+function restoreRaw(board, file, saved, context) {
+  try {
+    if (saved.data === null) removeQuietly(file);
+    else writeFileAtomic(file, saved.data);
+  } catch (err) {
+    logError(board, context, err);
+  }
+}
+
 function appendMessage(board, m) {
   const file = messagesFile(board, m.taskId);
   ensureNewlineAtEnd(file);
@@ -494,15 +514,17 @@ function appendMessage(board, m) {
  * fn returns is saved instead, and it already holds before's changes).
  *
  * Order of a write (§6): agent registry, event append (the commit point: the whole batch or
- * nothing), message files, snapshot. A failure before the append throws and commits none of the
- * events, but the registry is already written and keeps its changes. Most are harmless, but not an
- * agent cursor advanced to a seq the log did not reach: while the log is behind it, whatsNew
- * counts it as 0, so that agent is shown one batch of pings again; once later writes reach it
- * (housekeeping regenerates the same events under the same seqs), the messages committed up to it
- * are never pinged. A derived file that cannot be written, after the append or in the rebuild a
- * stale snapshot needs first, is logged and reported in `degraded`
- * ('messages', 'snapshot'), never thrown, so a committed write is not repeated; the stale snapshot
- * makes the next write rebuild the derived files.
+ * nothing), message files, snapshot. A failure before the append throws and commits nothing: the
+ * registry, already written, is put back to its exact previous bytes under the same lock (best
+ * effort: a failed restore is logged, and the original error is still the one thrown), so no
+ * registry change, such as an agent cursor, is ever ahead of the log after an ordinary failure.
+ * One case remains: a process crash between the two writes leaves the registry ahead. A cursor
+ * advanced there skips the seqs the log did not reach, which the next write reuses (housekeeping
+ * regenerates the same events), so that agent loses one batch of pings; while the log is still
+ * behind the cursor, whatsNew counts it as 0 and shows the ring again instead.
+ * A derived file that cannot be written, after the append or in the rebuild a stale snapshot needs
+ * first, is logged and reported in `degraded` ('messages', 'snapshot'), never thrown, so a
+ * committed write is not repeated; the stale snapshot makes the next write rebuild the derived files.
  * @template R
  * @param {Board} board
  * @param {(state: BoardState, registry: Registry, now: number) => ({ events?: any[], registry?: Registry, result?: R } | void)} fn
@@ -534,14 +556,21 @@ export function transact(board, fn, opts = {}) {
       ({ state, degraded } = rebuild(board, false));
       ({ out, events, accepted, registry } = prepare(board, state, fn, before, now));
     }
+    const previousRegistry = registry != null && events.length ? readRaw(board.files.agents) : null;
     if (registry != null) writeJsonAtomic(board.files.agents, registry, { pretty: false });
     if (events.length) {
       const sizeBefore = state.eventsSize;
-      if (fileSize(file) !== sizeBefore) {
-        throw new Error(`${NAME}: the event log changed while this process held the lock (${file}); nothing was appended`);
-      }
       const payload = events.map((e) => JSON.stringify(e)).join('\n') + '\n';
-      appendEvents(board, payload, sizeBefore); // the commit point
+      try {
+        if (fileSize(file) !== sizeBefore) {
+          throw new Error(`${NAME}: the event log changed while this process held the lock (${file}); nothing was appended`);
+        }
+        appendEvents(board, payload, sizeBefore); // the commit point
+      } catch (err) {
+        // nothing was committed: the registry goes back too, so no cursor is ever ahead of the log
+        if (previousRegistry) restoreRaw(board, board.files.agents, previousRegistry, 'restoring the registry after a failed append');
+        throw err;
+      }
       state.eventsSize = sizeBefore + Buffer.byteLength(payload);
       const failed = new Set(degraded);
       for (const m of accepted) {
