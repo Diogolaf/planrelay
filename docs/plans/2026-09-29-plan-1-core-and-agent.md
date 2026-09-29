@@ -4755,6 +4755,7 @@ Record anything unexpected as a task. Plan 3 runs the full acceptance script.
   - **Task 15:** `describe` and the brief show `getTask`'s stored names (`createdByName`, `completedByName`, `assigneeName`, message `authorName`) instead of calling `nameOf`.
   - **Task 16:**
     - `advanceCursor(agent, state.seq)`, never a time; `touchAgent` receives `seq: state.seq`;
+    - at `SessionStart`, the new agent's cursor ends up after the events of its own claim inheritance, so it is never pinged with "X continues this task in a new session" about itself; add a test;
     - pass `host: currentHost(env)`;
     - run housekeeping through `transact`'s `before`;
     - always return the registry;
