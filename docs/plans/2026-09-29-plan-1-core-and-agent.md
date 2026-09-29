@@ -4752,7 +4752,8 @@ Record anything unexpected as a task. Plan 3 runs the full acceptance script.
     - `whatsNew(state, reg, agentId, { afterSeq, since })` keeps messages with `seq > afterSeq`, and with `at >= since` when a time is given;
     - `cursor` and `prevCursor` in the registry are board sequence numbers;
     - `touchAgent` starts a new agent's cursor at `info.seq`, the current `state.seq` passed by the caller.
-  - **Task 15:**
+  - **Task 15 (done):** from here on each task gets one combined review, and only issues that would break in real use are fixed.
+  - **Task 15 (as planned):**
     - the brief shows `getTask`'s stored names (`createdByName`, `completedByName`, `assigneeName`, message `authorName`, open-question `authorName`) instead of calling `nameOf`;
     - the brief passes `[]` as messages to `getTask`: it needs none, and a task can hold thousands;
     - `whatsNew` returns `{ items, olderDropped }`; when `olderDropped` is true, the pings end with one line saying older updates fell out of the ping window and `get_task` has them.
@@ -4764,6 +4765,8 @@ Record anything unexpected as a task. Plan 3 runs the full acceptance script.
     - always return the registry;
     - add a test showing that a session returning after `claimTimeoutHours` loses its claim at its first prompt and is pinged about it.
   - **Task 17:**
+    - `post_message` replies with the new message id (for example "Posted question m14 on #3."), so the asker can match the answer ping that names it;
+    - pings and `whats_new` share Task 15's `formatPing`, so the wording is identical;
     - `whats_new` passes `{ afterSeq: agent.prevCursor ?? agent.cursor ?? 0, since }`, where the tool's `since` is an optional time filter that never moves the cursor;
     - `whats_new` reads the registry and the state together under the board lock, so a cursor written just before its events are appended is never seen ahead of the board;
     - `identify()` passes `seq: state.seq` to `touchAgent`, so an agent first registered by the server does not start at cursor 0;
