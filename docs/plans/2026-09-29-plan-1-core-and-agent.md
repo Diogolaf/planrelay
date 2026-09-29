@@ -1875,7 +1875,7 @@ function stamp(e, seq, now) {
  * @template R
  * @param {Board} board
  * @param {(state: BoardState, registry: Registry, now: number) => ({ events?: any[], registry?: Registry, result?: R } | void)} fn
- * @param {{ now?: number }} [opts]
+ * @param {{ now?: number, timeoutMs?: number }} [opts] timeoutMs bounds the wait for the lock (hooks pass a short one)
  * @returns {{ state: BoardState, events: BoardEvent[], result: R | undefined }}
  */
 export function transact(board, fn, opts = {}) {
@@ -1898,7 +1898,7 @@ export function transact(board, fn, opts = {}) {
     }
     if (out.registry) writeJsonAtomic(board.files.agents, out.registry, { pretty: false });
     return { state, events, result: out.result };
-  });
+  }, { timeoutMs: opts.timeoutMs });
 }
 
 export function readMessages(board, taskId) {
@@ -3570,6 +3570,8 @@ import { logError, openBoard, readRegistry, readState, transact } from '../core/
 import { formatBrief, formatPings } from './format.js';
 
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
+/** Hooks never wait long for the board lock: on contention they give up and fail open. */
+const HOOK_LOCK_TIMEOUT_MS = 2000;
 
 function hostPid(env) {
   const n = Number(env.CLAUDE_PID);
@@ -3629,7 +3631,7 @@ function sessionStart({ board, input, cwd, env, now }) {
     const events = [...maintenance(state, reg, board.config, now), ...inheritClaim(state, reg, agent.id, cwd)];
     const since = advanceCursor(agent, now);
     return { events, registry: reg, result: { reg, since, name: agent.name } };
-  }, { now });
+  }, { now, timeoutMs: HOOK_LOCK_TIMEOUT_MS });
   const rules = rulesPath(board.repoRoot);
   return contextOutput('SessionStart', formatBrief({
     agentName: result.name,
@@ -3648,7 +3650,7 @@ function promptSubmit({ board, input, cwd, env, now }) {
     const agent = touchAgent(reg, { id: input.session_id, folder: cwd, pid: hostPid(env) }, now);
     const since = advanceCursor(agent, now);
     return { events: maintenance(state, reg, board.config, now), registry: reg, result: { reg, since } };
-  }, { now });
+  }, { now, timeoutMs: HOOK_LOCK_TIMEOUT_MS });
   const pings = whatsNew(state, result.reg, input.session_id, result.since);
   return contextOutput('UserPromptSubmit', formatPings(pings, board.config.maxPings));
 }
@@ -3691,7 +3693,7 @@ function postToolUse({ board, input, cwd, env, now }) {
       }
     }
     return { events, registry: reg };
-  }, { now });
+  }, { now, timeoutMs: HOOK_LOCK_TIMEOUT_MS });
   return '';
 }
 
@@ -3699,7 +3701,7 @@ function sessionEnd({ board, input, now }) {
   transact(board, (state, reg) => {
     endAgent(reg, input.session_id, now);
     return { registry: reg };
-  }, { now });
+  }, { now, timeoutMs: HOOK_LOCK_TIMEOUT_MS });
   return '';
 }
 ```
@@ -4610,6 +4612,15 @@ Record anything unexpected as a task. Plan 3 runs the full acceptance script.
   - integration tests were added.
 
   The code in the repository supersedes the Task 2 listing above.
+- **Task 3 was hardened after review** (commit "fix(core): race-free stale takeover, Windows contention and strict read errors"). The changes:
+  - stale-lock takeover under a guard file, with token-checked release;
+  - Windows busy errors are retried;
+  - a hard age ceiling for locks;
+  - read helpers only swallow "file missing";
+  - atomic writes use a random temp name and retry the rename on Windows;
+  - `tempRepo` is isolated from personal git config.
+
+  The repository code supersedes the Task 3 listing. From Task 9 on, `transact` accepts `timeoutMs`, and hooks use 2 s.
 - **Carried over to plan 3, before the first push:**
   - CI hardening:
     - verify the gitleaks download with a SHA-256 checksum;
@@ -4621,3 +4632,6 @@ Record anything unexpected as a task. Plan 3 runs the full acceptance script.
     - run the denylist step even if gitleaks fails.
   - Run `--history` in CI, and add a `pre-push` hook over the pushed range.
   - Run the full-history scan once more right before the repository is made public.
+  - In the leak guard:
+    - treat `commit.cleanup=scissors` like `whitespace`, so comments above the scissors line are scanned;
+    - accept exactly `noreply@github.com` as a committer e-mail (never as author) in `--history`, so merges made on GitHub pass.
