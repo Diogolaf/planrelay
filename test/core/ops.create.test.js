@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createTask, updateTask, messageEvent, BoardError } from '../../src/core/ops.js';
+import { endAgent } from '../../src/core/agents.js';
 import { columnOf } from '../../src/core/derive.js';
 import { DEFAULTS } from '../../src/core/config.js';
 import { ctxWith, apply } from './ops-helpers.js';
@@ -82,7 +83,19 @@ test('nothing to update, and moving a claimed task to Backlog, are refused', () 
   assert.throws(() => updateTask(ctx, { id: 1, title: null, labels: undefined }), /Nothing to update/); // null means "not provided"
   assert.throws(() => updateTask(ctx, { id: 1, approved: false }), /^BoardError: #1 is claimed by Jade; ask them to release it first\.$/);
   assert.throws(() => updateTask(ctx, { id: 2, approved: false }), /^BoardError: You hold #2; release it before moving it back to Backlog\.$/);
-  assert.throws(() => updateTask(ctx, { id: 3, approved: false }), /#3 is claimed by Cobalt; ask them/); // the name stored with the claim
+});
+
+test('a task held by an ended session cannot go back to Backlog; the refusal says what will happen', () => {
+  const ctx = ctxWith({
+    tasks: [{ id: 1, assignee: 'a2' }, { id: 2, assignee: 'gone-agent', assigneeName: 'Cobalt' }, { id: 3, assignee: 'gone-agent' }],
+  });
+  endAgent(ctx.reg, 'a2', ctx.now);
+  const after = 'it is released automatically after 24 h without activity, or the human can ask you to take it over.';
+  assert.equal(errorOf(() => updateTask(ctx, { id: 1, approved: false })).message, `#1 is held by Jade, whose session has ended; ${after}`);
+  assert.equal(errorOf(() => updateTask(ctx, { id: 2, approved: false })).message, `#2 is held by Cobalt, whose session has ended; ${after}`);
+  assert.equal(errorOf(() => updateTask(ctx, { id: 3, approved: false })).message, `#3 is held by a session that has ended; ${after}`);
+  const slow = ctxWith({ tasks: [{ id: 3, assignee: 'gone-agent' }], cfg: { ...DEFAULTS, claimTimeoutHours: 72 } });
+  assert.match(errorOf(() => updateTask(slow, { id: 3, approved: false })).message, /released automatically after 72 h without activity/);
 });
 
 test('text fields are redacted', () => {
@@ -277,21 +290,28 @@ test('rank must be a finite number', () => {
   assert.deepEqual(updateTask(ctx, { id: 1, rank: -2.5 }).events[0].data.changes, { rank: -2.5 });
 });
 
-test("messageEvent carries the author's name; its fixed fields come after extra", () => {
+test("messageEvent carries the author's name; extra adds only its fixed list of fields", () => {
   const ctx = ctxWith({ tasks: [{ id: 1 }, { id: 7 }] });
+  const plain = messageEvent(ctx, 1, 'question', 'See #7 and #99.');
+  assert.deepEqual(plain.data.message, {
+    to: null, replyTo: null, relayedFromHuman: false, mentions: [7], taskId: 1, author: 'a1', authorName: 'Amber', kind: 'question',
+    text: 'See #7 and #99.',
+  });
   const ev = messageEvent(ctx, 1, 'question', 'See #7 and #99.', {
-    to: 'human', taskId: 99, author: 'a2', authorName: 'Jade', kind: 'answer', text: 'forged', mentions: [5],
+    to: 'human', replyTo: 'm3', relayedFromHuman: true, mentions: [5], about: 'unblocked', closesQuestions: true, // allowed
+    taskId: 99, author: 'a2', authorName: 'Jade', kind: 'answer', text: 'forged', id: 'm1', at: 0, polluted: 1, // dropped
   });
   assert.deepEqual(ev, {
     type: 'message.posted',
     actor: 'a1',
     data: {
       message: {
-        to: 'human', replyTo: null, relayedFromHuman: false, taskId: 1, author: 'a1', authorName: 'Amber', kind: 'question',
-        mentions: [7], text: 'See #7 and #99.',
+        to: 'human', replyTo: 'm3', relayedFromHuman: true, mentions: [5], about: 'unblocked', closesQuestions: true,
+        taskId: 1, author: 'a1', authorName: 'Amber', kind: 'question', text: 'See #7 and #99.',
       },
     },
   });
+  assert.deepEqual(messageEvent(ctx, 1, 'comment', 'x', { to: undefined }).data.message.to, null);
   apply(ctx, { events: [ev] });
   assert.equal(ctx.state.messages[0].authorName, 'Amber');
   assert.equal(messageEvent({ ...ctx, agentId: 'unregistered' }, 1, 'comment', 'Hi').data.message.authorName, null);

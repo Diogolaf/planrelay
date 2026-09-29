@@ -49,29 +49,61 @@ const EPIC_NO_DEPENDS = 'Epics cannot have dependencies; set dependsOn on the ta
 const LINK_HELP = 'use an http(s) URL or a path inside the repository, such as docs/plan.md';
 /** What update_task can change, in the order the "Nothing to update" message lists it. */
 const UPDATABLE = ['title', 'description', 'parent', 'labels', 'links', 'rank', 'addDependsOn', 'removeDependsOn', 'approved'];
+/** The fields each tool takes (§8); anything else is refused, so a typo is never silently ignored (§14). */
+const FIELDS = {
+  create: ['title', 'description', 'kind', 'parent', 'dependsOn', 'labels', 'requestedByHuman'],
+  update: ['id', ...UPDATABLE],
+  claim: ['id'],
+  post: ['taskId', 'text', 'kind', 'to', 'replyTo', 'relayedFromHuman'],
+  complete: ['id', 'summary'],
+  release: ['id', 'note'],
+};
 
 // ---------------------------------------------------------------------------------------------
 // Input normalization (§14). Every value an agent sends goes through these; the MCP layer passes
 // tool arguments straight through, so this is the only validator.
 // ---------------------------------------------------------------------------------------------
 
-/** One-line fields lose C0 and C1 controls (whitespace is collapsed instead), bidi controls and zero-width characters. */
-const ONE_LINE_DROP = /[\u0000-\u0008\u000e-\u001f\u007f-\u009f\u200b-\u200d\u202a-\u202e\u2066-\u2069\ufeff]/g;
-/** Multi-line fields keep newlines and tabs; every other control character goes. */
+/**
+ * Removed from every text field, one-line or multi-line (§14): invisible characters that can hide
+ * instructions from the human or split a secret so redaction misses it. Unicode tag characters
+ * (U+E0000-E007F, "ASCII smuggling"), word joiner and invisible operators (U+2060-2064), soft hyphen,
+ * U+180E, U+034F, zero-width space and U+FEFF. The u flag is safe: texts are made well-formed first.
+ */
+const HIDDEN = /[\u{e0000}-\u{e007f}\u2060-\u2064\u00ad\u180e\u034f\u200b\ufeff]/gu;
+/**
+ * One-line fields also lose C0 and C1 controls (whitespace is collapsed instead), bidi controls and
+ * marks (U+202A-202E, U+2066-2069, U+200E, U+200F, U+061C), ZWNJ and ZWJ.
+ */
+const ONE_LINE_DROP = /[\u0000-\u0008\u000e-\u001f\u007f-\u009f\u200c-\u200f\u202a-\u202e\u2066-\u2069\u061c]/g;
+/** Multi-line fields keep newlines and tabs; every other control character goes. Bidi marks, ZWNJ and ZWJ stay. */
 const MULTI_LINE_DROP = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g;
 
-/** Lone surrogates become U+FFFD and invisible characters go; whitespace is kept. */
-const dropInvisible = (s) => s.toWellFormed().replace(ONE_LINE_DROP, '');
+/** Lone surrogates become U+FFFD; hidden characters go. */
+const visible = (s) => s.toWellFormed().replace(HIDDEN, '');
+/** A one-line text without hidden, control, bidi or zero-width characters; whitespace is kept (see collapse). */
+const dropInvisible = (s) => visible(s).replace(ONE_LINE_DROP, '');
+/** A multi-line text with LF line ends and no hidden or control characters but newlines and tabs. */
+const multiLine = (s) => visible(s).replace(/\r\n?/g, '\n').replace(MULTI_LINE_DROP, '');
 const collapse = (s) => s.replace(/\s+/g, ' ').trim();
 
 /** An own field's value; null and undefined both mean "not provided" (§14). */
 const given = (obj, key) => (Object.hasOwn(obj, key) && obj[key] != null ? obj[key] : undefined);
 
-/** The tool input as an object of fields; missing input counts as no fields. */
-function fieldsOf(input) {
+/**
+ * The tool input as an object of fields; missing input counts as no fields. A field that is not in
+ * `allowed` is an error that lists the allowed ones (§14).
+ * @param {unknown} input @param {string[]} allowed
+ */
+function fieldsOf(input, allowed) {
   if (input == null) return {};
   if (typeof input !== 'object' || Array.isArray(input)) fail('The input must be an object of named fields.');
-  return input;
+  for (const key of Object.keys(input)) {
+    if (allowed.includes(key)) continue;
+    const near = allowed.find((a) => a.toLowerCase() === key.toLowerCase());
+    fail(`Unknown field ${echo(key)}${near ? ` (did you mean ${near}?)` : ''}; allowed: ${allowed.join(', ')}.`);
+  }
+  return /** @type {Record<string, any>} */ (input);
 }
 
 /** A short, one-line, redacted rendering of a value for an error message: at most ECHO_MAX characters of it. */
@@ -103,8 +135,19 @@ function capAt(s, max) {
 }
 
 /**
+ * Redacts a text and caps it at `max` so that what is stored is stable: redact(result) === result.
+ * A cut can leave a token-shaped end, and lower-casing can make one, so this repeats until redaction
+ * changes nothing; every round replaces secret text with the marker, so it ends.
+ */
+function settle(s, max) {
+  let out = capAt(redact(s), max);
+  for (let next = redact(out); next !== out; next = redact(out)) out = capAt(next, max);
+  return out;
+}
+
+/**
  * A text value: must be a string when given; normalized; refused when empty and required or longer
- * than `max` after normalization; then redacted and capped at `max`.
+ * than `max` after normalization; then redacted and capped at `max` (settle).
  * One-line texts are redacted before whitespace is collapsed (a line end tells a `KEY: value` apart
  * from prose) and again after (collapsing can join "Bearer" and its token).
  * @returns {string | undefined} undefined when not given (or empty) and not required
@@ -112,11 +155,11 @@ function capAt(s, max) {
 function readText(value, field, { max, oneLine, required }) {
   if (value == null) return required ? fail(`${field} is required.`) : undefined;
   if (typeof value !== 'string') fail(`${field} must be text${got(value)}.`);
-  const kept = oneLine ? dropInvisible(value) : value.toWellFormed().replace(/\r\n?/g, '\n').replace(MULTI_LINE_DROP, '');
+  const kept = oneLine ? dropInvisible(value) : multiLine(value);
   const plain = oneLine ? collapse(kept) : kept.trim();
   if (!plain) return required ? fail(`${field} is required.`) : '';
   if (plain.length > max) fail(`${field} is too long (max ${max} characters).`);
-  return capAt(oneLine ? redact(collapse(redact(kept))) : redact(plain), max);
+  return settle(oneLine ? collapse(redact(kept)) : plain, max);
 }
 
 /** A multi-line text (description, message, summary, note), normalized and redacted; '' when absent and optional. */
@@ -158,7 +201,9 @@ function taskNumbers(value, field, tooMany) {
 
 /**
  * Labels (§14): one-line, NFC, redacted, then lower-cased (the patterns are case-sensitive; the
- * marker keeps its case), each once; empty labels are dropped. Anything but text is an error.
+ * marker keeps its case) and redacted again, since lower case can make a token shape ("GHP_…"),
+ * so every stored label is stable under redact. Each once; empty labels are dropped. Anything but
+ * text is an error.
  */
 function cleanLabels(value) {
   const help = 'labels must be a list of text, such as ["bug"]';
@@ -173,9 +218,9 @@ function cleanLabels(value) {
     if (plain.length > LABEL_MAX) fail(`Labels can be up to ${LABEL_MAX} characters long${got(plain)}.`);
     const redacted = redact(collapse(redact(kept)));
     const lower = redacted.split(REDACTED).map((part) => part.toLowerCase()).join(REDACTED).normalize('NFC');
-    out.add(capAt(lower, LABEL_MAX));
+    out.add(settle(lower, LABEL_MAX));
+    if (out.size > LABELS_MAX) fail(TOO_MANY_LABELS);
   }
-  if (out.size > LABELS_MAX) fail(TOO_MANY_LABELS);
   return [...out];
 }
 
@@ -190,8 +235,9 @@ const SCHEME = /^([a-z][a-z\d+.-]*):/i;
 function linkTarget(value) {
   const target = cleanLine(value, 'link target', { max: LINK_TARGET_MAX });
   const scheme = SCHEME.exec(target)?.[1];
-  const slashed = target.replaceAll('\\', '/');
-  if (scheme?.length === 1) fail(`link target ${echo(target)} is an absolute path; ${LINK_HELP}.`);
+  // for the path checks: backslashes and percent-encoded dots and slashes count as what they encode
+  const slashed = target.replaceAll('\\', '/').replace(/%2f|%5c/gi, '/').replace(/%2e/gi, '.');
+  if (scheme?.length === 1) fail(`link target ${echo(target)} starts with a drive letter; ${LINK_HELP}.`);
   if (scheme) {
     const lower = scheme.toLowerCase();
     if (lower !== 'http' && lower !== 'https') fail(`link target: "${lower.slice(0, ECHO_MAX)}:" links are not allowed; ${LINK_HELP}.`);
@@ -206,8 +252,7 @@ function linkTarget(value) {
   }
   if (slashed.startsWith('/')) fail(`link target ${echo(target)} is not a path inside the repository; ${LINK_HELP}.`);
   let depth = 0;
-  for (const segment of slashed.split('/')) {
-    const s = segment.replace(/%2e/gi, '.');
+  for (const s of slashed.split('/')) {
     if (s === '..') depth -= 1;
     else if (s !== '' && s !== '.') depth += 1;
     if (depth < 0) fail(`link target ${echo(target)} points outside the repository; ${LINK_HELP}.`);
@@ -230,8 +275,8 @@ function cleanLinks(value) {
     if (seen.has(key)) continue;
     seen.add(key);
     out.push({ title, target });
+    if (out.length > LINKS_MAX) fail(TOO_MANY_LINKS);
   }
-  if (out.length > LINKS_MAX) fail(TOO_MANY_LINKS);
   return out;
 }
 
@@ -245,9 +290,13 @@ function getTask(ctx, value, field = 'id') {
   return Object.hasOwn(ctx.state.tasks, id) ? ctx.state.tasks[id] : fail(`#${id} does not exist. list_tasks shows the task numbers.`);
 }
 
-/** The display name of the agent holding a task: the registry's current name, else the name stored with the claim. */
+/**
+ * The display name of the agent holding a task: the registry's current name, else the name stored
+ * with the claim; null when neither knows it (the registry forgets ended agents after 7 days).
+ * @returns {string | null}
+ */
 function holderName(ctx, t) {
-  return getAgent(ctx.reg, t.assignee)?.name ?? t.assigneeName ?? nameOf(ctx.reg, t.assignee);
+  return getAgent(ctx.reg, t.assignee)?.name ?? t.assigneeName ?? null;
 }
 
 function checkParent(ctx, value, kind, selfId) {
@@ -328,21 +377,25 @@ export function claimedBy(state, agentId) {
   return Object.values(state.tasks).find((t) => t.assignee === agentId && !t.done) ?? null;
 }
 
+/** The only fields messageEvent's `extra` may add to a message; anything else is dropped. */
+const MESSAGE_EXTRA = ['to', 'replyTo', 'relayedFromHuman', 'mentions', 'about', 'closesQuestions'];
+
 /**
  * A message event by the acting agent, with its display name (§4). Callers must pass `content`
- * already normalized and redacted (cleanText does both); it is stored as given. `extra` may set
- * fields such as to, replyTo or relayedFromHuman, but never the task, author, name, kind, mentions or text.
+ * already normalized and redacted (cleanText does both); it is stored as given. `extra` may set only
+ * the MESSAGE_EXTRA fields (to, replyTo, relayedFromHuman, mentions, about, closesQuestions); the task,
+ * author, name, kind and text always come from the arguments.
  * @param {Ctx} ctx @param {number} taskId @param {string} kind @param {string} content @param {Record<string, any>} [extra]
  */
 export function messageEvent(ctx, taskId, kind, content, extra = {}) {
+  const added = Object.fromEntries(MESSAGE_EXTRA.filter((k) => Object.hasOwn(extra, k) && extra[k] !== undefined).map((k) => [k, extra[k]]));
   return {
     type: 'message.posted',
     actor: ctx.agentId,
     data: {
       message: {
-        to: null, replyTo: null, relayedFromHuman: false, ...extra,
-        taskId, author: ctx.agentId, authorName: getAgent(ctx.reg, ctx.agentId)?.name ?? null, kind,
-        mentions: mentionsIn(content, ctx.state, taskId), text: content,
+        to: null, replyTo: null, relayedFromHuman: false, mentions: mentionsIn(content, ctx.state, taskId), ...added,
+        taskId, author: ctx.agentId, authorName: getAgent(ctx.reg, ctx.agentId)?.name ?? null, kind, text: content,
       },
     },
   };
@@ -359,7 +412,7 @@ export function messageEvent(ctx, taskId, kind, content, extra = {}) {
  * @param {Ctx} ctx
  */
 export function createTask(ctx, input) {
-  const f = fieldsOf(input);
+  const f = fieldsOf(input, FIELDS.create);
   const kind = given(f, 'kind') ?? 'task';
   if (kind !== 'task' && kind !== 'epic') fail(`kind must be "task" or "epic"${got(kind)}.`);
   const title = cleanLine(given(f, 'title'), 'title', { max: TITLE_MAX });
@@ -394,7 +447,7 @@ export function createTask(ctx, input) {
  * @param {Ctx} ctx
  */
 export function updateTask(ctx, input) {
-  const f = fieldsOf(input);
+  const f = fieldsOf(input, FIELDS.update);
   const t = getTask(ctx, given(f, 'id'));
   const provided = (k) => (k === 'parent' ? Object.hasOwn(f, k) && f[k] !== undefined : given(f, k) !== undefined);
   if (!UPDATABLE.some(provided)) fail(`Nothing to update. Give #${t.id} at least one of: ${UPDATABLE.join(', ')}.`);
@@ -452,9 +505,12 @@ export function updateTask(ctx, input) {
     if (t.kind === 'epic') fail('Epics are always approved; approve the tasks inside it.');
     if (t.done) fail(`#${t.id} is done; its approval no longer changes.`);
     if (!approved && t.assignee) {
-      fail(t.assignee === ctx.agentId
-        ? `You hold #${t.id}; release it before moving it back to Backlog.`
-        : `#${t.id} is claimed by ${holderName(ctx, t)}; ask them to release it first.`);
+      if (t.assignee === ctx.agentId) fail(`You hold #${t.id}; release it before moving it back to Backlog.`);
+      if (liveOwner(ctx, t)) fail(`#${t.id} is claimed by ${holderName(ctx, t)}; ask them to release it first.`);
+      // the holder's session has ended (or the registry no longer knows it): nobody can be asked
+      const name = holderName(ctx, t);
+      fail(`#${t.id} is held by ${name ? `${name}, whose session has ended` : 'a session that has ended'}; it is released `
+        + `automatically after ${ctx.cfg.claimTimeoutHours} h without activity, or the human can ask you to take it over.`);
     }
     events.push({ type: 'task.approved', actor: ctx.agentId, data: { id: t.id, approved } });
   }
@@ -495,7 +551,7 @@ function liveOwner(ctx, t) {
  * @param {Ctx} ctx
  */
 export function claimTask(ctx, input) {
-  const f = fieldsOf(input);
+  const f = fieldsOf(input, FIELDS.claim);
   const t = getTask(ctx, given(f, 'id'));
   if (t.kind === 'epic') fail(`#${t.id} is an epic; claim one of its tasks.`);
   if (t.done) fail(`#${t.id} is already done; pick a Ready task instead.`);
@@ -508,11 +564,13 @@ export function claimTask(ctx, input) {
   if (waits.length) fail(`#${t.id} waits on ${waits.join(', ')}. Pick a Ready task instead.`);
   const events = [];
   if (t.assignee) {
+    // the holder is gone, or unknown to the registry: the claim is taken over like a gone holder's
     const me = nameOf(ctx.reg, ctx.agentId);
     const previous = holderName(ctx, t);
     // a new session can carry the gone holder's name (§4 Names, continuity)
-    const from = myName(ctx) === previous ? `the earlier ${previous}` : previous;
-    events.push(systemNote(t.id, `${me} took over from ${from}, whose session had ended.`, { to: t.assignee }));
+    const from = previous !== null && myName(ctx) === previous ? `the earlier ${previous}` : previous;
+    const text = from === null ? `${me} took over from a session that had ended.` : `${me} took over from ${from}, whose session had ended.`;
+    events.push(systemNote(t.id, text, { to: t.assignee }));
   }
   const folder = getAgent(ctx.reg, ctx.agentId)?.folder ?? null;
   events.push({ type: 'task.claimed', actor: ctx.agentId, data: { id: t.id, agent: ctx.agentId, agentName: myName(ctx), folder } });
@@ -554,7 +612,7 @@ function answeredQuestion(ctx, t, value) {
  * @param {Ctx} ctx
  */
 export function postMessage(ctx, input) {
-  const f = fieldsOf(input);
+  const f = fieldsOf(input, FIELDS.post);
   const t = getTask(ctx, given(f, 'taskId'), 'taskId');
   const kind = given(f, 'kind') ?? 'comment';
   if (!MESSAGE_KINDS.includes(kind)) fail(`kind must be "comment", "question" or "answer"${got(kind)}.`);
@@ -581,7 +639,7 @@ export function postMessage(ctx, input) {
  * @param {Ctx} ctx
  */
 export function completeTask(ctx, input) {
-  const f = fieldsOf(input);
+  const f = fieldsOf(input, FIELDS.complete);
   const t = getTask(ctx, given(f, 'id'));
   if (t.kind === 'epic') fail(`#${t.id} is an epic; epics are not completed, their progress follows their tasks.`);
   if (t.done) fail(`#${t.id} is already done.`);
@@ -616,7 +674,7 @@ export function completeTask(ctx, input) {
  * @param {Ctx} ctx
  */
 export function releaseTask(ctx, input) {
-  const f = fieldsOf(input);
+  const f = fieldsOf(input, FIELDS.release);
   const t = getTask(ctx, given(f, 'id'));
   if (!t.assignee) fail(`#${t.id} is not claimed; there is nothing to release.`);
   if (liveOwner(ctx, t)) fail(`#${t.id} is claimed by ${holderName(ctx, t)}; only they can release it.`);
@@ -648,7 +706,7 @@ function checklistText(value) {
   }
   const kept = dropInvisible(s);
   if (!collapse(kept)) return '';
-  return capAt(redact(collapse(redact(kept))), ITEM_MAX);
+  return settle(collapse(redact(kept)), ITEM_MAX);
 }
 
 /**
