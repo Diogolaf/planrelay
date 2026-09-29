@@ -1,19 +1,28 @@
-import { activeCount, statusOf } from './agents.js';
+import { getAgent, statusOf } from './agents.js';
+
+const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 
 /**
- * Would editing `file` collide with another active agent's recent work (§10)?
+ * Would editing `file` collide with another agent's recent work (§10 File locks)? It does when
+ * another agent touched the file within lockMinutes, on a different task (two agents without a
+ * task collide too), and that agent is active (`auto`) or anything but gone (`always`); `off`
+ * never locks. The asking agent always counts as active, whatever its own lastSeen says. A touch
+ * whose time is not a number, or lies more than lockMinutes ahead of now, has expired.
+ * @param {{ reg: import('./store.js').Registry, cfg: import('./config.js').Config, now: number,
+ *   agentId: string, taskId: number | null, file: string }} q file: the lock key (paths.lockKey)
  * @returns {{ agent: import('./agents.js').Agent, task: number | null } | null}
  */
 export function lockConflict({ reg, cfg, now, agentId, taskId, file }) {
   if (cfg.locks === 'off') return null;
-  if (cfg.locks === 'auto' && activeCount(reg, now, cfg) < 2) return null;
   const touch = Object.hasOwn(reg.touches, file) ? reg.touches[file] : undefined;
-  if (!touch || touch.agent === agentId) return null;
-  if (now - touch.at > cfg.lockMinutes * 60_000) return null;
-  const other = Object.hasOwn(reg.agents, touch.agent) ? reg.agents[touch.agent] : undefined;
-  if (statusOf(other, now, cfg) !== 'active') return null;
+  if (!isObj(touch) || touch.agent === agentId) return null;
+  const lockMs = cfg.lockMinutes * 60_000;
+  if (!Number.isFinite(touch.at) || touch.at > now + lockMs || now - touch.at > lockMs) return null;
+  const other = getAgent(reg, touch.agent);
+  const status = statusOf(other, now, cfg);
+  if (status === 'gone' || (status === 'idle' && cfg.locks !== 'always')) return null;
   if (touch.task != null && touch.task === taskId) return null;
-  return { agent: other, task: touch.task };
+  return { agent: /** @type {import('./agents.js').Agent} */ (other), task: touch.task ?? null };
 }
 
 /** Remembers who touched a file last, and marks the task as active. */

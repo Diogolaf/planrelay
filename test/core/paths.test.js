@@ -521,3 +521,13 @@ test('lockKey folds case where the file system ignores it', () => {
   assert.equal(lockKey('src/app.js'), 'src/app.js');
   assert.equal(lockKey(null), null);
 });
+
+test('lockKey gives one key for composed and decomposed accents', () => {
+  const composed = 'docs/résumé.md';
+  const decomposed = 'docs/résumé.md';
+  assert.notEqual(composed, decomposed);
+  assert.equal(lockKey(decomposed), lockKey(composed));
+  assert.equal(lockKey(decomposed), composed);
+  const upper = 'docs/RÉSUMÉ.md';
+  assert.equal(lockKey(upper) === lockKey(composed), FOLDS_CASE);
+});

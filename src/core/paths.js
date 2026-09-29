@@ -322,8 +322,11 @@ export function toRepoPath(repoRoot, file) {
   return out === '..' || out.startsWith('../') ? null : out;
 }
 
-/** The key for file locks: a repo path, case-folded where the file system ignores case (Windows, macOS). */
+/**
+ * The key for file locks: a repo path in NFC (macOS and editors may spell accents decomposed),
+ * case-folded where the file system ignores case (Windows, macOS).
+ */
 export function lockKey(repoPath) {
   if (!repoPath) return repoPath;
-  return FOLD_CASE ? repoPath.toLowerCase() : repoPath;
+  return fold(repoPath);
 }

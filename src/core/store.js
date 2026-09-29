@@ -12,10 +12,14 @@ import { applyEvent, emptyState, isEvent, SCHEMA } from './reduce.js';
 /** @typedef {import('./reduce.js').BoardState} BoardState */
 /** @typedef {import('./reduce.js').BoardEvent} BoardEvent */
 /**
+ * Housekeeping (maintenance.js) adds `missing`, when a claim's folder was first seen missing, by
+ * task id, and `sweptAt`, the time of the last file-system sweep.
  * @typedef {{
  *   agents: Record<string, any>,
  *   activity: Record<number, number>,
- *   touches: Record<string, { agent: string, task: number | null, at: number }>
+ *   touches: Record<string, { agent: string, task: number | null, at: number }>,
+ *   missing?: Record<string, { agent: string, folder: string, at: number }>,
+ *   sweptAt?: number
  * }} Registry
  */
 
