@@ -56,7 +56,7 @@ export function readJson(file, fallback) {
     throw err;
   }
   try {
-    return JSON.parse(text.replace(/^﻿/, ''));
+    return JSON.parse(text.replace(/^\uFEFF/, ''));
   } catch (err) {
     if (err instanceof SyntaxError) return fallback;
     throw err;

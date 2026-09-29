@@ -29,7 +29,7 @@ const MAX_PROBLEMS = 10;
 
 /** Text of a config file: UTF-8 with or without a BOM, or UTF-16 LE/BE with a BOM. */
 function decode(input) {
-  if (typeof input === 'string') return input.replace(/^﻿/, '');
+  if (typeof input === 'string') return input.replace(/^\uFEFF/, '');
   if (!(input instanceof Uint8Array)) return String(input);
   const buf = Buffer.from(input.buffer, input.byteOffset, input.byteLength);
   if (buf[0] === 0xff && buf[1] === 0xfe) return buf.toString('utf16le', 2);
@@ -37,7 +37,7 @@ function decode(input) {
     const le = Buffer.from(buf.subarray(2, buf.length - (buf.length % 2))); // a copy, even length
     return le.swap16().toString('utf16le');
   }
-  return buf.toString('utf8').replace(/^﻿/, '');
+  return buf.toString('utf8').replace(/^\uFEFF/, '');
 }
 
 /**
@@ -54,6 +54,12 @@ function parseMessage(err) {
       : `Unexpected character U+${cp.toString(16).toUpperCase().padStart(4, '0')}`;
   }
   return msg.split('"')[0].replace(/[^\x20-\x7e]/g, '?').trim().slice(0, 120) || 'parse error';
+}
+
+/** A key name for a problem line: at most 40 characters, JSON-quoted, printable ASCII only. */
+function keyName(key) {
+  const hex4 = (c) => c.charCodeAt(0).toString(16).padStart(4, '0');
+  return JSON.stringify(key.slice(0, 40)).replace(/[^\x20-\x7e]/g, (c) => `\\u${hex4(c)}`);
 }
 
 function kindOf(value) {
@@ -104,7 +110,7 @@ export function parseConfig(input) {
   }
   for (const key of Object.keys(raw)) { // own keys only; a "__proto__" key is just an unknown key
     if (!Object.hasOwn(DEFAULTS, key)) {
-      problems.push(`unknown option ${JSON.stringify(key.slice(0, 40))}`);
+      problems.push(`unknown option ${keyName(key)}`);
       continue;
     }
     const { value, problem } = check(key, raw[key]);
@@ -120,19 +126,18 @@ export function parseConfig(input) {
 
 /**
  * Reads the config of a checkout (the store passes the main worktree, §7). Never throws:
- * a missing file means defaults; any other read error means defaults plus one problem.
+ * a missing file (or a missing folder on the way) means defaults; any other error means
+ * defaults plus one problem.
  * @param {string} root @returns {ConfigResult}
  */
 export function readConfig(root) {
-  let bytes;
   try {
-    bytes = fs.readFileSync(path.join(root, CONFIG_DIR, 'config.json'));
+    return parseConfig(fs.readFileSync(path.join(root, CONFIG_DIR, 'config.json')));
   } catch (err) {
-    const code = /** @type {any} */ (err)?.code;
-    if (code === 'ENOENT') return { config: DEFAULTS, problems: [] };
-    return { config: DEFAULTS, problems: [`could not read ${FILE} (${code ?? 'error'})`] };
+    const e = /** @type {any} */ (err);
+    if (e?.code === 'ENOENT' || e?.code === 'ENOTDIR') return { config: DEFAULTS, problems: [] };
+    return { config: DEFAULTS, problems: [`could not read ${FILE} (${e?.code ?? e?.name ?? 'error'})`] };
   }
-  return parseConfig(bytes);
 }
 
 /** @param {string} root @returns {Config} */

@@ -40,12 +40,12 @@ test('valid values override defaults', () => {
 });
 
 test('a UTF-8 BOM is accepted, from a file and from a string', () => {
-  assert.deepEqual(readConfig(withConfig('﻿{"maxPings":3}')), { config: { ...DEFAULTS, maxPings: 3 }, problems: [] });
-  assert.deepEqual(parseConfig('﻿{"maxPings":3}'), { config: { ...DEFAULTS, maxPings: 3 }, problems: [] });
+  assert.deepEqual(readConfig(withConfig('\uFEFF{"maxPings":3}')), { config: { ...DEFAULTS, maxPings: 3 }, problems: [] });
+  assert.deepEqual(parseConfig('\uFEFF{"maxPings":3}'), { config: { ...DEFAULTS, maxPings: 3 }, problems: [] });
 });
 
 test('UTF-16 with a BOM is accepted (Notepad "Unicode", PowerShell 5 Out-File)', () => {
-  const text = '﻿{ "maxPings": 3, "locks": "off" }\r\n';
+  const text = '\uFEFF{ "maxPings": 3, "locks": "off" }\r\n';
   const le = Buffer.from(text, 'utf16le');
   const be = Buffer.from(le).swap16();
   const expected = { config: { ...DEFAULTS, maxPings: 3, locks: 'off' }, problems: [] };
@@ -61,6 +61,19 @@ test('an unreadable config (a folder at config.json) means defaults and one prob
   assert.equal(config, DEFAULTS);
   assert.deepEqual(problems, ['could not read .agentboard/config.json (EISDIR)']);
   assert.deepEqual(loadConfig(root), DEFAULTS);
+});
+
+test('a file where the .agentboard folder should be counts as no config (ENOTDIR like ENOENT)', (t) => {
+  const root = tempDir();
+  fs.writeFileSync(path.join(root, '.agentboard'), 'not a folder');
+  assert.deepEqual(readConfig(root), { config: DEFAULTS, problems: [] }); // ENOENT on Windows, ENOTDIR on POSIX
+  t.mock.method(fs, 'readFileSync', () => { throw Object.assign(new Error('simulated'), { code: 'ENOTDIR' }); });
+  assert.deepEqual(readConfig(root), { config: DEFAULTS, problems: [] });
+});
+
+test('other read errors (for example EACCES) mean defaults and one problem', (t) => {
+  t.mock.method(fs, 'readFileSync', () => { throw Object.assign(new Error('simulated'), { code: 'EACCES' }); });
+  assert.deepEqual(readConfig(tempDir()), { config: DEFAULTS, problems: ['could not read .agentboard/config.json (EACCES)'] });
 });
 
 test('readConfig never throws, even for a bad root', () => {
@@ -156,7 +169,7 @@ test('a fractional maxPings falls back to the default', () => {
   assert.deepEqual(parse({ maxPings: 1e-300 }).config, DEFAULTS);
 });
 
-test('problems never quote file content', () => {
+test('problems quote no file content except an unknown key name, truncated and escaped to printable ASCII', () => {
   const words = 'private-words-from-the-file';
   const cases = [`{"locks":"${words}"}`, `{"a":${words}}`, `${words}`, `{"maxPings":3 ${words}}`, '\u0001{}'];
   for (const text of cases) {
@@ -166,6 +179,16 @@ test('problems never quote file content', () => {
     assert.match(problems[0], /^[\x20-\x7e]+$/, problems[0]);
   }
   assert.deepEqual(parseConfig('\u0001{}').problems, ['not valid JSON (Unexpected character U+0001); using defaults']);
+  // a right-to-left override, a line separator and an emoji in a key name cannot reorder or break the brief
+  const key = ['max', 0x202e, 'Pings', 0x2028, 0x1f600].map((p) => (typeof p === 'number' ? String.fromCodePoint(p) : p)).join('');
+  const { problems } = parse({ [key]: 1 });
+  assert.deepEqual(problems, ['unknown option "max\\u202ePings\\u2028\\ud83d\\ude00"']);
+  assert.match(problems[0], /^[\x20-\x7e]+$/);
+});
+
+test('the defaults themselves parse without problems', () => {
+  assert.deepEqual(parseConfig(JSON.stringify(DEFAULTS)), { config: { ...DEFAULTS }, problems: [] });
+  assert.deepEqual(parseConfig(JSON.stringify(DEFAULTS, null, 2)).problems, []);
 });
 
 test('many problems are capped so they cannot flood the brief', () => {
