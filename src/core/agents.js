@@ -49,7 +49,7 @@ export function claudePid(env = process.env) {
  * its MCP server: CLAUDE_PID when it is a whole number above 0 (claudePid), else `ppid`, this process's parent.
  * Claude Code sets CLAUDE_PID for hooks but not for MCP servers (seen in Claude Code 2.1.247).
  * The fallback assumes Claude Code starts hooks and the MCP server in exec form (`command` plus
- * `args`, as hooks/hooks.json and .mcp.json declare them), with no shell or launcher in between,
+ * `args`, as hooks/hooks.json and the plugin manifest declare them), with no shell or launcher in between,
  * so the parent is the Claude Code process itself; in a real session, the parent pid of both
  * equalled the hooks' CLAUDE_PID. A launcher in between (a Volta or Scoop shim) gives its own pid
  * instead; resolveAgentId's folder step still finds the session after /clear, and the MCP server

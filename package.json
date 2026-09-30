@@ -7,7 +7,7 @@
   "private": true,
   "engines": { "node": ">=22" },
   "bin": { "agentboard": "src/cli.js" },
-  "files": ["src/", ".claude-plugin/", "hooks/", "skills/", ".mcp.json", "LICENSE", "README.md"],
+  "files": ["src/", ".claude-plugin/", "hooks/", "skills/"],
   "scripts": {
     "test": "node --test \"test/**/*.test.js\"",
     "test:ui": "node --test \"test/ui/**/*.ui.js\"",

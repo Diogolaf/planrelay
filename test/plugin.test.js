@@ -32,7 +32,7 @@ const childEnv = (extra = {}) => ({
  */
 function installedPlugin() {
   const root = path.join(tempDir(), 'Plugin Root', NAME);
-  for (const p of ['src', 'hooks', 'skills', '.claude-plugin', '.mcp.json', 'package.json']) fs.cpSync(p, path.join(root, p), { recursive: true });
+  for (const p of ['src', 'hooks', 'skills', '.claude-plugin', 'package.json']) fs.cpSync(p, path.join(root, p), { recursive: true });
   const rootVar = root.split(path.sep).join('/');
   /** Spawn arguments for a { command, args } entry of the installed plugin. */
   const argv = ({ command, args }) => {
@@ -48,9 +48,9 @@ test('plugin manifest', () => {
   assert.equal(m.version, json('package.json').version);
   assert.equal(m.license, json('package.json').license);
   assert.equal(typeof m.description, 'string');
-  // components live at their default locations at the plugin root, never inside .claude-plugin/
-  assert.deepEqual(fs.readdirSync('.claude-plugin'), ['plugin.json']);
-  for (const key of ['hooks', 'mcpServers', 'skills', 'commands', 'agents']) assert.equal(m[key], undefined, key);
+  assert.deepEqual(fs.readdirSync('.claude-plugin').sort(), ['marketplace.json', 'plugin.json']);
+  // hooks and the skill live at their default locations at the plugin root
+  for (const key of ['hooks', 'skills', 'commands', 'agents']) assert.equal(m[key], undefined, key);
 });
 
 test('every hook event runs the CLI hook entry point in exec form', () => {
@@ -72,8 +72,22 @@ test('every hook event runs the CLI hook entry point in exec form', () => {
 });
 
 test('MCP server registration', () => {
-  const server = json('.mcp.json').mcpServers[NAME];
-  assert.deepEqual(server, { command: 'node', args: [ENTRY, 'mcp'] });
+  // in the manifest, not in a root .mcp.json: that file would also be offered as a project server
+  // to anyone who opens this repository in Claude Code, where the plugin root is not set
+  assert.deepEqual(json('.claude-plugin/plugin.json').mcpServers, { [NAME]: { command: 'node', args: [ENTRY, 'mcp'] } });
+  assert.equal(fs.existsSync('.mcp.json'), false);
+});
+
+test('the marketplace of this repository offers the plugin from its root', () => {
+  const m = json('.claude-plugin/marketplace.json');
+  assert.equal(m.name, NAME);
+  assert.equal(typeof m.owner.name, 'string');
+  assert.equal(m.plugins.length, 1);
+  const [plugin] = m.plugins;
+  assert.equal(plugin.name, NAME);
+  assert.equal(plugin.source, './');
+  assert.equal(typeof plugin.description, 'string');
+  assert.equal(plugin.version, undefined); // plugin.json holds the version
 });
 
 test('the installed plugin runs from a folder with spaces in its path', async () => {
@@ -88,7 +102,7 @@ test('the installed plugin runs from a folder with spaces in its path', async ()
   assert.equal(r.status, 0, r.stderr);
   assert.match(JSON.parse(r.stdout).hookSpecificOutput.additionalContext, /you are agent Amber/);
 
-  const [mcpNode, mcpArgs] = argv(json('.mcp.json').mcpServers[NAME]);
+  const [mcpNode, mcpArgs] = argv(json('.claude-plugin/plugin.json').mcpServers[NAME]);
   const child = spawn(mcpNode, mcpArgs, { env, cwd: repo });
   let out = '';
   child.stdout.on('data', (c) => { out += c.toString(); });

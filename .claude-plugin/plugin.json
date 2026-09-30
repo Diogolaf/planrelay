@@ -4,5 +4,11 @@
   "description": "A local task board for AI coding agents: create, claim, discuss and hand off tasks across sessions.",
   "author": { "name": "agentboard contributors" },
   "license": "MIT",
-  "keywords": ["tasks", "board", "handoff", "agents", "mcp"]
+  "keywords": ["tasks", "board", "handoff", "agents", "mcp"],
+  "mcpServers": {
+    "agentboard": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/src/cli.js", "mcp"]
+    }
+  }
 }
