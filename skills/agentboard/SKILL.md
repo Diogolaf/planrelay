@@ -30,6 +30,7 @@ The board is the memory every agent session in this project shares. Each session
 | "create an epic …", "put #3 in the Search epic" | `create_task` with `kind: "epic"`; `update_task` with `parent` (the epic's id; `null` takes it out) |
 | "what's ready?", "what's on the board?" | `list_tasks` (`column: "ready"`, or no filter) and summarize |
 | "what happened since yesterday?" | `list_tasks` with `changedSince` (Unix ms), `get_task` where needed, then summarize |
+| "open the board", "show me the board" | `open_board`, then tell the human the URL it returns |
 | "approve #21 and #25" | `update_task` with `approved: true` for each |
 | "move #9 to the backlog" | `update_task` with `approved: false` |
 | "prioritize #19" | `update_task` with a lower `rank`: lists sort by rank, a task starts with its number as rank, and `rank: 0` puts it first |

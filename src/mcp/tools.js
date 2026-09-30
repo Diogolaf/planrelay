@@ -10,11 +10,12 @@ import {
 import { getTask, listTasks, whatsNew } from '../core/queries.js';
 import { snippet } from '../core/reduce.js';
 import { logError, openBoard, readMessages, readRegistry, readState, transact } from '../core/store.js';
+import { ensureDashboard } from '../dashboard/launch.js';
 import { formatPings, wrapBoardData } from '../hooks/format.js';
 import { createHandler, serveStdio } from './protocol.js';
 
 /**
- * The nine agent tools (§8) of one MCP server process, and the server itself.
+ * The ten agent tools (§8) of one MCP server process, and the server itself.
  *
  * - Every write goes through transact: housekeeping first (`before`, §10), then the agent is
  *   registered or refreshed (identify), then the operation. The config is read again on every
@@ -26,10 +27,11 @@ import { createHandler, serveStdio } from './protocol.js';
  * @typedef {import('../core/store.js').Board} Board
  * @typedef {import('../core/store.js').Registry} Registry
  * @typedef {{ sessionId?: string | null, pid?: number | null, pidFromParent?: boolean, folder: string, host?: string,
- *   now?: () => number }} Who
+ *   now?: () => number, ensureDashboard?: (board: Board) => { url: string, reused: boolean } }} Who
  *   sessionId: CLAUDE_CODE_SESSION_ID; pid: the host process (hostPid()); pidFromParent: true when pid
  *   is only the parent process (no CLAUDE_PID), which a launcher makes its own: it then matches
- *   agents but is never stored on one; folder: the board's root folder; host: currentHost() of this process
+ *   agents but is never stored on one; folder: the board's root folder; host: currentHost() of this process;
+ *   now, ensureDashboard: the clock and open_board's launcher (dashboard/launch.js), which tests replace
  */
 
 function packageVersion() {
@@ -186,12 +188,13 @@ function describe(t, reg, me) {
 }
 
 /**
- * The nine agent tools (§8) for one MCP server process. Handlers take the tool arguments and
+ * The ten agent tools (§8) for one MCP server process. Handlers take the tool arguments and
  * return the reply text; a refusal is thrown as a BoardError, anything else is a failure.
  * @param {Board} board @param {Who} who
  */
 export function buildTools(board, who) {
   const now = who.now ?? (() => Date.now());
+  const dashboard = who.ensureDashboard ?? ensureDashboard;
   const host = who.host ?? currentHost();
   const sessionId = typeof who.sessionId === 'string' && who.sessionId !== '' ? who.sessionId : null;
   const pid = Number.isInteger(who.pid) && /** @type {number} */ (who.pid) > 0 ? /** @type {number} */ (who.pid) : null;
@@ -379,6 +382,17 @@ export function buildTools(board, who) {
       inputSchema: obj({ id: ID, note: TEXT }, ['id', 'note']),
       run: (a) => `Released #${write(releaseTask, a).op.id} with your handoff note.`,
     },
+    {
+      // no board write: no agent is registered or touched (only the dashboard records itself, in dashboard.json)
+      name: 'open_board',
+      description: "Open the board's dashboard in the browser and return its URL.",
+      inputSchema: obj({}),
+      run: (a) => {
+        if (Object.keys(a ?? {}).length) throw new BoardError('open_board takes no fields; call it with {}.');
+        const { url, reused } = dashboard(board);
+        return `The board is ${reused ? 'already ' : ''}open at ${url}.`;
+      },
+    },
   ];
   return tools.map(({ run, ...t }) => ({ ...t, handler: fenced(run) }));
 }
@@ -396,7 +410,7 @@ function fenced(run) {
 }
 
 /**
- * The MCP request handler for a board: the nine tools, with failures other than refusals logged to
+ * The MCP request handler for a board: the ten tools, with failures other than refusals logged to
  * the board's errors.log (§16).
  * @param {Board} board @param {Who} who
  */
@@ -417,7 +431,7 @@ function oneLine(err, max = 300) {
 }
 
 /**
- * The server when the board could not be opened: it still starts and lists the nine tools, and
+ * The server when the board could not be opened: it still starts and lists the ten tools, and
  * every call answers with the reason and what to do, so the session goes on without the board.
  * @param {string} folder @param {unknown} err
  */

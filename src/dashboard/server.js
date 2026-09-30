@@ -11,6 +11,7 @@ import { listTasks } from '../core/queries.js';
 import { logError, logHealth, readMessages, readRegistry, readState } from '../core/store.js';
 import { buildTaskView } from './taskview.js';
 import { buildView } from './view.js';
+import { watchBoard } from './watch.js';
 
 /**
  * The dashboard's local HTTP server (§13 Server, §14): the static UI and a read-only JSON API over
@@ -258,11 +259,14 @@ export function createDashboardServer({
 
 /**
  * Starts the dashboard server on 127.0.0.1. Rejects when it cannot listen (a port in use).
- * close() ends the event streams and every connection, then resolves once the server has closed.
- * @param {DashboardOptions & { port?: number }} opts port: 0 (default) for a free one
+ * It watches the board (watchBoard): every change sends the board's seq to the event streams.
+ * close() stops watching, ends the event streams and every connection, then resolves once the
+ * server has closed.
+ * @param {DashboardOptions & { port?: number, watch?: false | import('./watch.js').WatchOptions }} opts
+ *   port: 0 (default) for a free one; watch: watchBoard's options, or false for no watching
  * @returns {Promise<{ server: DashboardServer, url: string, port: number, close: () => Promise<void>, notify: (seq: number) => void }>}
  */
-export function startDashboard({ port = 0, ...opts }) {
+export function startDashboard({ port = 0, watch = {}, ...opts }) {
   const server = createDashboardServer(opts);
   return new Promise((resolve, reject) => {
     server.once('error', reject);
@@ -270,7 +274,10 @@ export function startDashboard({ port = 0, ...opts }) {
       server.off('error', reject);
       server.on('error', (err) => logError(opts.board, 'dashboard server', err));
       const actual = /** @type {import('node:net').AddressInfo} */ (server.address()).port;
+      const { board } = opts;
+      const watcher = watch === false ? null : watchBoard(board, () => server.notify(readState(board).seq), watch);
       const close = () => new Promise((done) => {
+        watcher?.close();
         server.endEvents();
         server.close(() => done(undefined));
         server.closeAllConnections();

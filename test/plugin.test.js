@@ -96,7 +96,7 @@ test('the installed plugin runs from a folder with spaces in its path', async ()
   child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' })}\n`);
   child.stdin.end();
   assert.equal(await exited, 0);
-  assert.equal(JSON.parse(out).result.tools.length, 9);
+  assert.equal(JSON.parse(out).result.tools.length, 10);
 });
 
 test('skill front matter', () => {
@@ -129,4 +129,5 @@ test('the skill names only real tools, tool fields and config options', () => {
   assert.match(text, /`update_task`[^\n]*`checklist`/);
   assert.match(text, /`relayedFromHuman: true`/);
   assert.match(text, /config problems/i);
+  assert.match(text, /"open the board"[^\n]*"show me the board"[^\n]*`open_board`[^\n]*URL/);
 });

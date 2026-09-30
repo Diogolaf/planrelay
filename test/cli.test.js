@@ -2,8 +2,11 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import http from 'node:http';
 import path from 'node:path';
 import { openBoard, readRegistry, readState } from '../src/core/store.js';
+import { boardId } from '../src/dashboard/server.js';
+import { buildRecipesBoard } from './fixtures/recipes-app.js';
 import { gitEnv, tempDir, tempRepo } from './helpers.js';
 
 const CLI = path.resolve('src/cli.js');
@@ -115,7 +118,7 @@ test('mcp: answers initialize and tools/list over stdio, and exits when its inpu
   const init = await s.answer(1);
   const list = await s.answer(2);
   assert.equal(init.result.serverInfo.name, 'agentboard');
-  assert.equal(list.result.tools.length, 9);
+  assert.equal(list.result.tools.length, 10);
   assert.equal(await s.close(), 0);
   assert.equal(s.lines.length, 2);
   assert.equal(s.stderr(), '');
@@ -189,9 +192,73 @@ test('unknown command prints usage and exits 1; help prints it and exits 0', () 
   for (const args of [['dance'], []]) {
     const r = runCli(args);
     assert.equal(r.status, 1);
-    assert.match(r.stderr, /usage: agentboard <hook\|mcp\|repair>/);
+    assert.match(r.stderr, /usage: agentboard <hook\|mcp\|repair\|dashboard>/);
   }
   const r = runCli(['--help']);
   assert.equal(r.status, 0);
-  assert.match(r.stdout, /usage: agentboard <hook\|mcp\|repair>/);
+  assert.match(r.stdout, /usage: agentboard <hook\|mcp\|repair\|dashboard>/);
+});
+
+/** GET a path of a local server; resolves with the parsed JSON body. @param {number} port @param {string} reqPath */
+function getJson(port, reqPath) {
+  return new Promise((resolve, reject) => {
+    const req = http.get({ host: '127.0.0.1', port, path: reqPath, headers: { host: `127.0.0.1:${port}` }, agent: false }, (res) => {
+      let body = '';
+      res.on('data', (c) => { body += c; });
+      res.on('end', () => resolve(JSON.parse(body)));
+    });
+    req.on('error', reject);
+  });
+}
+
+test('dashboard: serves the board until stopped, records itself in dashboard.json, and a second start reuses it', async () => {
+  const repo = tempRepo();
+  const board = buildRecipesBoard(repo);
+  const file = path.join(board.dir, 'dashboard.json');
+  const child = spawn(process.execPath, [CLI, 'dashboard', '--no-open', '--port', '0', '--dir', repo], { env: childEnv() });
+  let out = '';
+  let err = '';
+  child.stdout.on('data', (c) => { out += c.toString(); });
+  child.stderr.on('data', (c) => { err += c.toString(); });
+  const exited = new Promise((resolve) => child.on('exit', (code) => resolve(code)));
+  let url = '';
+  try {
+    await waitFor(() => out.includes('\n') || err !== '');
+    const m = /^agentboard dashboard for (.+): (http:\/\/127\.0\.0\.1:(\d+)\/) \(Ctrl\+C to stop\)\n$/.exec(out);
+    assert.ok(m, `stdout: ${out} stderr: ${err}`);
+    assert.equal(m[1], board.projectName);
+    url = m[2];
+    const port = Number(m[3]);
+    assert.deepEqual(await getJson(port, '/api/ping'), { app: 'agentboard', board: boardId(board) });
+    const rec = JSON.parse(fs.readFileSync(file, 'utf8'));
+    assert.deepEqual({ pid: rec.pid, port: rec.port, board: rec.board }, { pid: child.pid, port, board: boardId(board) });
+
+    const again = runCli(['dashboard', '--no-open', '--dir', repo], { timeout: 10000 });
+    assert.equal(again.status, 0, again.stderr);
+    assert.equal(again.stdout, `agentboard dashboard for ${board.projectName} is already running: ${url}\n`);
+  } finally {
+    child.kill('SIGINT');
+  }
+  const code = await exited;
+  if (process.platform === 'win32') {
+    // Windows has no signals: kill() ends the process at once, so its record stays, naming a dead
+    // process, and the next start replaces it (launch.test.js). Ctrl+C in a terminal is a clean exit.
+    assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).pid, child.pid);
+  } else {
+    assert.equal(code, 0, err);
+    assert.equal(fs.existsSync(file), false);
+  }
+});
+
+test('dashboard: a bad --port, an unknown option or a folder that does not exist prints why and exits 1', () => {
+  const usage = /^usage: agentboard dashboard \[--port N\] \[--dir PATH\] \[--no-open\]\n$/;
+  for (const args of [['--port', 'abc'], ['--port', '70000'], ['--port', '-1'], ['--port', '80.5'], ['--port'], ['--verbose'], ['extra']]) {
+    const r = runCli(['dashboard', '--no-open', ...args], { cwd: tempRepo(), timeout: 10000 });
+    assert.equal(r.status, 1, args.join(' '));
+    assert.match(r.stderr, usage, args.join(' '));
+  }
+  const missing = path.join(tempDir(), 'no such folder');
+  const r = runCli(['dashboard', '--no-open', '--dir', missing], { timeout: 10000 });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /^agentboard: dashboard failed: .*no such folder.* is not a folder\n$/);
 });

@@ -3,8 +3,10 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
+import { readState } from '../../src/core/store.js';
 import { buildView } from '../../src/dashboard/view.js';
 import { createDashboardServer, startDashboard, boardId } from '../../src/dashboard/server.js';
+import { buildTools } from '../../src/mcp/tools.js';
 import { NAME } from '../../src/name.js';
 import { buildRecipesBoard, FIXTURE_IDS as ID } from '../fixtures/recipes-app.js';
 import { tempRepo } from '../helpers.js';
@@ -263,6 +265,21 @@ test('/api/events sends a change for every notify, and heartbeats', async () => 
     events.close();
     await waitFor(() => s.server.eventClients === 0); // dropped when its connection closes
     s.notify(43);
+  } finally {
+    await s.close();
+  }
+});
+
+test('a write to the board reaches the event streams as a change with its seq', async () => {
+  const r = tempRepo();
+  const b = buildRecipesBoard(r, { now: NOW });
+  const s = await startDashboard({ board: b, now: () => NOW, watch: { debounceMs: 20 } });
+  try {
+    const events = openEvents(s.port);
+    await events.until('retry: 2000\n\n');
+    buildTools(b, { sessionId: 's9', folder: r }).find((t) => t.name === 'create_task')?.handler({ title: 'Print a recipe', requestedByHuman: true });
+    await events.until(`event: change\ndata: ${readState(b).seq}\n\n`);
+    events.close();
   } finally {
     await s.close();
   }

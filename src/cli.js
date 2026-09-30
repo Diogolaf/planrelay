@@ -7,11 +7,15 @@ import { NAME } from './name.js';
  *   Fail-open: it always exits 0 and never throws, whatever the input.
  * - `mcp`: the agent tools (§8) over stdio, for the session's project.
  * - `repair`: rebuilds every snapshot from the event log (§6) of the board of the current folder.
+ * - `dashboard [--port N] [--dir PATH] [--no-open]`: serves the dashboard (§13) of the board of
+ *   PATH, else of the current folder, until Ctrl+C, and opens it in the browser. A dashboard already
+ *   running for that board is reused: its URL is printed (and opened), and the command exits.
  *
  * Each command loads only the modules it needs, so a hook call does not pay for the MCP server.
  */
 
-const USAGE = `usage: ${NAME} <hook|mcp|repair>`;
+const USAGE = `usage: ${NAME} <hook|mcp|repair|dashboard>`;
+const DASHBOARD_USAGE = `usage: ${NAME} dashboard [--port N] [--dir PATH] [--no-open]`;
 /** repair names at most this many skipped lines. */
 const LINES_NAMED = 20;
 
@@ -68,10 +72,53 @@ async function repairCommand() {
   }
 }
 
-const [command] = process.argv.slice(2);
+/**
+ * The options of `dashboard`, or null when they are not usable: an unknown option, an argument,
+ * or a port that is not a whole number from 0 to 65535.
+ * @param {string[]} args @returns {Promise<{ port: number, dir: string | undefined, open: boolean } | null>}
+ */
+async function dashboardOptions(args) {
+  const { parseArgs } = await import('node:util');
+  let values;
+  try {
+    ({ values } = parseArgs({ args, options: { port: { type: 'string' }, dir: { type: 'string' }, 'no-open': { type: 'boolean' } } }));
+  } catch {
+    return null;
+  }
+  const port = values.port === undefined ? 0 : /^\d{1,5}$/.test(values.port) ? Number(values.port) : NaN;
+  if (!(port <= 65535)) return null;
+  return { port, dir: values.dir, open: values['no-open'] !== true };
+}
+
+async function dashboardCommand(args) {
+  const opts = await dashboardOptions(args);
+  if (!opts) {
+    console.error(DASHBOARD_USAGE);
+    process.exitCode = 1;
+    return;
+  }
+  const [fs, { openBoard }, { openBrowser, serveDashboard }] = await Promise.all([
+    import('node:fs'), import('./core/store.js'), import('./dashboard/launch.js'),
+  ]);
+  try {
+    if (opts.dir !== undefined && !fs.statSync(opts.dir, { throwIfNoEntry: false })?.isDirectory()) throw new Error(`${opts.dir} is not a folder`);
+    const board = opts.dir !== undefined ? openBoard(opts.dir) : openBoard(process.cwd(), { projectDir: process.env.CLAUDE_PROJECT_DIR });
+    const { url, reused } = await serveDashboard(board, { port: opts.port });
+    console.log(reused
+      ? `${NAME} dashboard for ${board.projectName} is already running: ${url}`
+      : `${NAME} dashboard for ${board.projectName}: ${url} (Ctrl+C to stop)`);
+    if (opts.open) openBrowser(url);
+  } catch (err) {
+    console.error(`${NAME}: dashboard failed: ${/** @type {any} */ (err)?.message ?? err}`);
+    process.exitCode = 1;
+  }
+}
+
+const [command, ...rest] = process.argv.slice(2);
 if (command === 'hook') await hook();
 else if (command === 'mcp') await mcp();
 else if (command === 'repair') await repairCommand();
+else if (command === 'dashboard') await dashboardCommand(rest);
 else if (command === '--help' || command === '-h' || command === 'help') console.log(USAGE);
 else {
   console.error(USAGE);
