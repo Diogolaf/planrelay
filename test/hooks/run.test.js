@@ -135,6 +135,7 @@ test('/clear: a question that came after the last prompt reaches the new session
   const text = context(hook(repo, 'SessionStart', 's4', { source: 'clear' }, T0 + MIN, jade));
   assert.match(text, /you are agent Jade/);
   assert.match(text, new RegExp(`\n#1 · Amber asks you: "Is the CSV schema final\\?" \\(answer with post_message kind "answer", replyTo "${q}"\\)`));
+  assert.equal(text.match(/asks you/g).length, 1);
   assert.equal(hook(repo, 'UserPromptSubmit', 's4', { prompt: 'hello' }, T0 + 2 * MIN, jade), '');
   asAgent(repo, 's4', postMessage, { taskId: 1, kind: 'answer', replyTo: q, text: 'Yes, final.' }, T0 + 2 * MIN);
   assert.deepEqual(readState(openBoard(repo)).tasks[1].openQuestions, []); // Amber's task is no longer blocked

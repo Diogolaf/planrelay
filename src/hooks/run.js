@@ -102,8 +102,9 @@ function mergePings(a, b) {
  * (SessionStart after a compaction keeps the session id) never does, whatever the `source`. Its
  * cursor ends after its own inheritance events, so it is never pinged about them. The brief's
  * updates also bring what the sessions it replaces had not been shown (replacedSessions), such
- * as an answer or a question that came after their last prompt; its cursor is past those too, so
- * its first prompt does not repeat them. @param {HookCall} h
+ * as an answer that came after their last prompt, and every question to them that is still open
+ * (from the message ring), shown or not; its cursor is past those too, so its first prompt does
+ * not repeat them. @param {HookCall} h
  */
 function sessionStart(h) {
   const { board, id, folder } = h;
@@ -120,10 +121,11 @@ function sessionStart(h) {
     const since = advanceCursor(agent, upTo);
     return { events, registry: reg, result: { reg, since, name: agent.name, replaced } };
   }, writeOpts(h));
-  const pings = result.replaced.reduce(
-    (all, r) => mergePings(all, whatsNew(state, result.reg, r.id, { afterSeq: r.cursor })),
-    whatsNew(state, result.reg, id, { afterSeq: result.since }),
-  );
+  const pings = result.replaced.reduce((all, r) => {
+    // every question to it that is still open, even one it was shown: its conversation is gone
+    const open = whatsNew(state, result.reg, r.id, { afterSeq: 0 }).items.filter((p) => p.reason === 'question');
+    return mergePings(mergePings(all, whatsNew(state, result.reg, r.id, { afterSeq: r.cursor })), { items: open, olderDropped: false });
+  }, whatsNew(state, result.reg, id, { afterSeq: result.since }));
   const rules = rulesPath(board.configRoot);
   return contextOutput('SessionStart', formatBrief({
     agentName: result.name,

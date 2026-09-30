@@ -302,6 +302,32 @@ test('/clear with a launcher and a second live session in the same folder: the s
   }
 });
 
+test('/clear after a question was pinged but not answered: the new session is shown it again and answers it with post_message', () => {
+  const repo = tempRepo();
+  const clock = { t: T0 };
+  const JADE = process.ppid;
+  hook(repo, 'SessionStart', 'a1', T0, process.pid);
+  hook(repo, 'SessionStart', 'j1', T0, JADE);
+  const amber = toolsFor(repo, 'a1', { pid: process.pid, clock });
+  amber.call('create_task', { title: 'Filter by prep time', requestedByHuman: true });
+  amber.call('claim_task', { id: 1 });
+  const q = /question (m\d+)/.exec(amber.call('post_message', { taskId: 1, kind: 'question', to: 'Jade', text: 'Is the CSV schema final?' }))[1];
+  // Jade is pinged at its next prompt and does not answer; then its human runs /clear
+  assert.match(context(hook(repo, 'UserPromptSubmit', 'j1', T0 + MIN, JADE, { prompt: 'go on' })), /Amber asks you/);
+  hook(repo, 'SessionEnd', 'j1', T0 + 2 * MIN, JADE, { reason: 'clear' });
+  const brief = context(hook(repo, 'SessionStart', 'j2', T0 + 2 * MIN, JADE, { source: 'clear' }));
+  const ask = `#1 · Amber asks you: "Is the CSV schema final\\?" \\(answer with post_message kind "answer", replyTo "${q}"\\)`;
+  assert.match(brief, new RegExp(`Updates since you were last here:\n${ask}`));
+  assert.equal(brief.match(/asks you/g).length, 1);
+  assert.equal(hook(repo, 'UserPromptSubmit', 'j2', T0 + 3 * MIN, JADE, { prompt: 'go on' }), '');
+  // Jade's server keeps the first session id and acts for the new session
+  const jade = toolsFor(repo, 'j1', { pid: JADE, clock });
+  clock.t = T0 + 3 * MIN;
+  assert.match(jade.call('post_message', { taskId: 1, kind: 'answer', replyTo: q, text: 'Yes, final.' }), new RegExp(`^Posted answer m\\d+ on #1, answering ${q}\\.$`));
+  assert.equal(lastEvent(repo).actor, 'j2');
+  assert.deepEqual(readState(openBoard(repo)).tasks[1].openQuestions, []);
+});
+
 test('behind a launcher, the server never stores its parent pid: after a server write and /clear, a question to the old session still reaches the new one', async () => {
   const repo = tempRepo();
   const jadePid = anotherTerminal();
