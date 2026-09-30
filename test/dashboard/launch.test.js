@@ -248,6 +248,32 @@ test('with idleMs, an open event stream keeps the dashboard up; the idle time co
   await assert.rejects(ping(started.url));
 });
 
+test('with idleMs, requests keep the dashboard up without an event stream (a hidden tab); the idle time counts from the last one', async () => {
+  const board = openBoard(tempRepo());
+  const proc = fakeProc();
+  const started = await serveDashboard(board, { proc, idleMs: 300 });
+  for (let i = 0; i < 8; i++) {
+    await sleep(100);
+    assert.deepEqual(proc.exits, [], `request ${i + 1}`);
+    await ping(started.url);
+  }
+  const lastAt = Date.now(); // 800 ms and more after the start, with no stream ever open
+  await waitFor(() => proc.exits.length > 0);
+  assert.ok(Date.now() - lastAt >= 250, `stopped ${Date.now() - lastAt} ms after the last request`);
+  assert.equal(fs.existsSync(dashboardFile(board)), false);
+});
+
+test('SIGHUP (the terminal closing) stops the dashboard like SIGINT', async () => {
+  const board = openBoard(tempRepo());
+  const proc = fakeProc();
+  const started = await serveDashboard(board, { proc });
+  proc.emit('SIGHUP');
+  await waitFor(() => proc.exits.length > 0);
+  assert.deepEqual(proc.exits, [0]);
+  assert.equal(fs.existsSync(dashboardFile(board)), false);
+  await assert.rejects(ping(started.url));
+});
+
 test('without idleMs, a dashboard with no browser connected keeps running', async () => {
   const board = openBoard(tempRepo());
   const proc = fakeProc();

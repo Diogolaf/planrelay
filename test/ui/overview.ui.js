@@ -78,7 +78,8 @@ test('at 1024 px no card is cut off and nothing scrolls sideways', () => withDas
   // the panels are the cards here, Now holds one card per agent
   const cards = ['needs-you', 'agent-card', 'shipped-today', 'epics', 'where-the-work-is', 'next-in-line']
     .map((id) => `[data-testid="${id}"]`).join(', ');
-  assert.equal(await page.locator(cards).count(), 7); // Amber and Jade in Now
+  // Amber and Jade in Now; Shipped today is hidden while nothing was shipped since local midnight
+  assert.equal(await page.locator(cards).count(), 6 + (await page.getByTestId('shipped-today').count()));
   assert.deepEqual(await layoutProblems(page, cards), []);
   const width = await page.evaluate(() => document.documentElement.scrollWidth);
   assert.ok(width <= 1024, `no horizontal scroll: ${width}`);

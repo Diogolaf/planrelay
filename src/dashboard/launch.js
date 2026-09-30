@@ -27,7 +27,8 @@ const START_TIMEOUT_MS = 5_000;
 const START_POLL_MS = 100;
 /**
  * A dashboard that open_board starts stops after this many minutes without a browser tab on it
- * (no event stream open), so it neither lingers until reboot nor keeps the project folder busy.
+ * (no event stream open and no request), so it neither lingers until reboot nor keeps the project
+ * folder busy.
  */
 const IDLE_EXIT_MINUTES = 30;
 const DETACHED = Object.freeze({ detached: true, stdio: 'ignore', windowsHide: true });
@@ -128,10 +129,11 @@ export function ensureDashboard(board, { spawn = childProcess.spawn, open = open
 
 /**
  * The `dashboard` command's work: reuses the live dashboard of the board, or starts one in this
- * process and records it in dashboard.json. SIGINT and SIGTERM stop it: the record is removed
- * (while it still names this process, as at any exit), the server closed, and the process exits
- * with code 0. With `idleMs`, it also stops once no event stream (a browser tab) has been open for
- * that long, counted from the start or from when the last one closed.
+ * process and records it in dashboard.json. SIGINT, SIGTERM and SIGHUP (the terminal closing) stop
+ * it: the record is removed (while it still names this process, as at any exit), the server closed,
+ * and the process exits with code 0. With `idleMs`, it also stops once no browser tab has been on it
+ * for that long: no event stream open and no request, counted from the start, from when the last
+ * stream closed or from the last request (a hidden tab closes its stream but keeps asking).
  * @param {Board} board
  * @param {{ port?: number, idleMs?: number | null, proc?: Proc, now?: () => number, alive?: (pid: number) => boolean }} [opts]
  *   port: 0 (default) for a free one; idleMs: null (default) to run until stopped; proc: `process`
@@ -160,20 +162,21 @@ export async function serveDashboard(board, { port = 0, idleMs = null, proc = pr
     forgetDashboard(board, pid);
     dash.close().then(() => proc.exit(0));
   };
-  proc.on('SIGINT', stop);
-  proc.on('SIGTERM', stop);
+  for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) proc.on(signal, stop);
   proc.on('exit', () => forgetDashboard(board, pid));
   if (idleMs != null) {
-    /** @param {number} clients the open event streams */
-    const count = (clients) => {
+    /** Starts the idle countdown again, unless an event stream is open. */
+    const arm = () => {
       if (idle) clearTimeout(idle);
       idle = null;
-      if (clients > 0 || stopping) return;
+      if (dash.server.eventClients > 0 || stopping) return;
       idle = setTimeout(stop, idleMs);
       idle.unref(); // the server keeps the process alive, not this timer
     };
-    dash.server.on('eventclients', count);
-    count(dash.server.eventClients);
+    dash.server.on('eventclients', arm);
+    // a hidden tab has no stream (see ui/app.js) but still loads the view every minute
+    dash.server.on('request', arm);
+    arm();
   }
   return { url: dash.url, reused: false };
 }
