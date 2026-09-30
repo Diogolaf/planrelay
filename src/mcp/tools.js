@@ -368,7 +368,8 @@ export function buildTools(board, who) {
     },
     {
       name: 'complete_task',
-      description: 'Complete the task you hold. summary: what changed, how it was verified, what was left out.',
+      description: 'Complete the task you hold. Every checklist item must be marked done first; remove the ones you left out. '
+        + 'summary: what changed, how it was verified, what was left out.',
       inputSchema: obj({ id: ID, summary: TEXT }, ['id', 'summary']),
       run: (a) => {
         const { op } = write(completeTask, a);

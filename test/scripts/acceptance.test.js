@@ -336,7 +336,8 @@ test('checkSolo passes on the board a good run leaves, and names what is missing
     'ok',
   ]);
 
-  // one session does it all: a suggestion instead of the human's task, a checklist nobody touched, no file
+  // one session does it all: a suggestion instead of the human's task, a checklist nobody touched (so the board
+  // refuses to complete #2), no file
   const alone = project();
   const a = pretendSession(alone, { sessionId: 'solo-first' });
   a.start();
@@ -344,10 +345,10 @@ test('checkSolo passes on the board a good run leaves, and names what is missing
   a.board('create_task', { title: 'Add a table of contents to README.md', requestedByHuman: true });
   a.board('claim_task', { id: 2 });
   a.board('update_task', { id: 2, checklist: [{ text: 'Add the heading', done: false }, { text: 'List the sections', done: false }] });
-  a.board('complete_task', { id: 2, summary: 'Done.' });
+  assert.match(a.board('complete_task', { id: 2, summary: 'Done.' }), /^#2 has 2 checklist items not marked done/);
   assert.deepEqual(verdicts(solo(alone)), [
-    "#1 is an agent's suggestion, not a request of the human",
-    'the session that first claimed #2 also completed it',
+    "#1 is an agent's suggestion, not a request of the human; #2 is In progress",
+    '#2 was not completed',
     'none of its 2 items is done',
     '#1 lists no touched file; #2 lists no touched file',
     'ok',

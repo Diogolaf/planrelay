@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { openBoard, readState, readRegistry, emptyRegistry, transact } from '../../src/core/store.js';
 import { getAgent, touchAgent } from '../../src/core/agents.js';
 import { DEFAULTS } from '../../src/core/config.js';
-import { claimTask, completeTask, touchTaskFile } from '../../src/core/ops.js';
+import { claimTask, completeTask, touchTaskFile, updateTask } from '../../src/core/ops.js';
 import { applyEvent, emptyState, RECENT_LIMIT } from '../../src/core/reduce.js';
 import { buildView, withDeadEnded, SHOWN_ACTIVITY, UNKNOWN_COLOR } from '../../src/dashboard/view.js';
 import { buildRecipesBoard, FIXTURE_IDS as ID } from '../fixtures/recipes-app.js';
@@ -227,6 +227,9 @@ test('Now: the last file shows only when it was edited during the current claim'
   }, { now: at });
   const card = (now) => buildView({ state: readState(board), reg: readRegistry(board), cfg: DEFAULTS, now, midnight: MIDNIGHT,
     projectName: 'p', badLines: 0, host: null, alive: () => true }).agents.find((a) => a.name === 'Amber');
+  // her checklist is finished first: a task is completed with every item done
+  const ticked = readState(board).tasks[ID.vegetarian].checklist.map((i) => ({ text: i.text, done: true }));
+  op(updateTask, { id: ID.vegetarian, checklist: ticked }, NOW + MIN);
   op(completeTask, { id: ID.vegetarian, summary: 'Done.' }, NOW + MIN);
   assert.deepEqual([card(NOW + MIN).task, card(NOW + MIN).lastFile], [null, 'src/filters/diet.js']); // no task: the last file stays
   op(claimTask, { id: ID.passwordReset }, NOW + 2 * MIN);

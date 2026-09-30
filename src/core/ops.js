@@ -749,6 +749,13 @@ export function completeTask(ctx, input) {
     fail(`#${t.id} is ${endedHolder(ctx, t)}; claim it with takeOver: true if the human asked, then complete it.`);
   }
   const summary = cleanText(given(f, 'summary'), 'summary');
+  // a finished task has no unticked step: each is done, or removed and named in the summary
+  const unticked = t.checklist.filter((i) => !i.done);
+  if (unticked.length) {
+    const items = unticked.length === 1 ? '1 checklist item' : `${unticked.length} checklist items`;
+    fail(`#${t.id} has ${items} not marked done (below). Mark the ones you did as done with update_task checklist, `
+      + 'and remove the ones you left out and name them in the summary. Then complete the task.', unticked.map((i) => `- ${i.text}`));
+  }
   const events = [];
   /** @type {Map<string | null, string[]>} question ids by asker */
   const asked = new Map();

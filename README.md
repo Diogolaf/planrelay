@@ -116,7 +116,7 @@ It listens on 127.0.0.1 only, so no other machine can reach it. A dashboard open
 | `update_task` | Edits a task: title, description, epic, labels, dependencies, links, checklist, approval, rank. |
 | `claim_task` | Takes a Ready task to work on. An agent holds one task at a time. |
 | `post_message` | Posts a comment, asks a question (to you, to one agent or to any agent), or answers one. |
-| `complete_task` | Marks the agent's task done, with a summary: what changed, how it was verified, what was left out. |
+| `complete_task` | Marks the agent's task done, with a summary: what changed, how it was verified, what was left out. Every checklist step must be ticked first, or removed if it was left out. |
 | `release_task` | Gives a task up, with a handoff note: where the work stopped and what comes next. |
 | `open_board` | Opens the dashboard in the browser and returns its address. |
 

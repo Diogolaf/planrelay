@@ -98,6 +98,25 @@ test('complete needs a summary, closes open questions and unblocks dependents', 
   assert.equal(columnOf(ctx.state.tasks[3], ctx.state.tasks), 'blocked');
 });
 
+test('complete refuses while checklist items are not marked done, and lists them as board data', () => {
+  const ctx = ctxWith({ tasks: [{ id: 1, assignee: 'a1' }] });
+  const list = (...done) => ['Add the heading', 'List the sections', 'Link them'].map((text, i) => ({ text, done: done[i] }));
+  apply(ctx, updateTask(ctx, { id: 1, checklist: list(true, false, false) }));
+  assert.throws(() => completeTask(ctx, { id: 1, summary: 'Done.' }), (e) => {
+    assert.ok(e instanceof BoardError);
+    assert.equal(e.message, '#1 has 2 checklist items not marked done (below). Mark the ones you did as done with update_task '
+      + 'checklist, and remove the ones you left out and name them in the summary. Then complete the task.');
+    assert.deepEqual(e.data, ['- List the sections', '- Link them']); // agent-written text: shown inside the fence
+    return true;
+  });
+  apply(ctx, updateTask(ctx, { id: 1, checklist: list(true, true, false) }));
+  refuses(() => completeTask(ctx, { id: 1, summary: 'Done.' }), /^#1 has 1 checklist item not marked done \(below\)\./);
+  // the step left out is removed, and the summary says so
+  apply(ctx, updateTask(ctx, { id: 1, checklist: list(true, true, false).slice(0, 2) }));
+  apply(ctx, completeTask(ctx, { id: 1, summary: 'Heading and sections added. Left out: the links.' }));
+  assert.equal(ctx.state.tasks[1].done, true);
+});
+
 test("complete and release respect another live agent's claim", () => {
   const ctx = ctxWith({ tasks: [{ id: 1, assignee: 'a2' }, { id: 2 }] });
   assert.throws(() => completeTask(ctx, { id: 1, summary: 'x' }), /claimed by Jade/);
