@@ -105,7 +105,7 @@ test('complete refuses while checklist items are not marked done, and lists them
   assert.throws(() => completeTask(ctx, { id: 1, summary: 'Done.' }), (e) => {
     assert.ok(e instanceof BoardError);
     assert.equal(e.message, '#1 has 2 checklist items not marked done (below). Mark the ones you did as done with update_task '
-      + 'checklist, and remove the ones you left out and name them in the summary. Then complete the task.');
+      + 'checklist (send the whole list), and remove the ones you left out and name them in the summary. Then complete the task.');
     assert.deepEqual(e.data, ['- List the sections', '- Link them']); // agent-written text: shown inside the fence
     return true;
   });

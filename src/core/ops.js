@@ -753,8 +753,8 @@ export function completeTask(ctx, input) {
   const unticked = t.checklist.filter((i) => !i.done);
   if (unticked.length) {
     const items = unticked.length === 1 ? '1 checklist item' : `${unticked.length} checklist items`;
-    fail(`#${t.id} has ${items} not marked done (below). Mark the ones you did as done with update_task checklist, `
-      + 'and remove the ones you left out and name them in the summary. Then complete the task.', unticked.map((i) => `- ${i.text}`));
+    fail(`#${t.id} has ${items} not marked done (below). Mark the ones you did as done with update_task checklist `
+      + '(send the whole list), and remove the ones you left out and name them in the summary. Then complete the task.', unticked.map((i) => `- ${i.text}`));
   }
   const events = [];
   /** @type {Map<string | null, string[]>} question ids by asker */

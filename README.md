@@ -190,6 +190,8 @@ The dashboard's browser tests use Playwright, kept in its own development packag
     npm run setup:ui   # once
     npm run test:ui
 
+If the browser tests say that Playwright's browser is missing, run `npm run setup:ui` again: another project that installs Playwright browsers on the same machine can remove the ones it does not know.
+
 `npm run screenshots` takes the screenshots in `docs/design/` again, from the recipes-app test data. It needs `npm run setup:ui` too.
 
 `node scripts/acceptance.mjs [solo|pair|all]` runs the scripted acceptance: two scenarios on a throwaway recipes-app project in the temp folder, then checks on the board they leave. It starts real Claude Code sessions on your own account, so their usage counts against your plan: five short sessions for both scenarios (two for `solo`, three for `pair`), with the `haiku` model unless `--model` names another. `--keep` keeps the project and the transcripts.
