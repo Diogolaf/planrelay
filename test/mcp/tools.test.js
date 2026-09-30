@@ -224,6 +224,10 @@ const NOT_YET = 'Your session is not registered on the board yet; try again. If 
 // A launcher (Volta, Scoop shims) starts node as its own child: the server's parent pid is the
 // launcher's, not the Claude Code process's. Both are live processes; this one plays the launcher.
 const SHIM = process.ppid;
+/** A live process of its own: another terminal's Claude Code. The caller kills it. */
+const anotherTerminal = () => spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+/** The additionalContext a hook printed ('' for nothing). */
+const context = (out) => (out ? JSON.parse(out).hookSpecificOutput.additionalContext : '');
 
 // This test process plays Claude Code: its hooks get CLAUDE_PID = process.pid. Claude Code gives its
 // MCP server no CLAUDE_PID; the server is its direct child, so its parent pid is the same process.
@@ -279,8 +283,7 @@ test('/clear with a launcher between Claude Code and node: the server acts as th
 
 test('/clear with a launcher and a second live session in the same folder: the server does not guess', async () => {
   const repo = tempRepo();
-  // the second terminal's Claude Code: a live process of its own
-  const other = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+  const other = anotherTerminal();
   try {
     hook(repo, 'SessionStart', 's1', Date.now(), process.pid);
     hook(repo, 'SessionStart', 't1', Date.now(), other.pid);
@@ -297,6 +300,46 @@ test('/clear with a launcher and a second live session in the same folder: the s
   } finally {
     other.kill();
   }
+});
+
+test('behind a launcher, the server never stores its parent pid: after a server write and /clear, a question to the old session still reaches the new one', async () => {
+  const repo = tempRepo();
+  const jadePid = anotherTerminal();
+  try {
+    hook(repo, 'SessionStart', 'a1', Date.now(), process.pid);
+    hook(repo, 'SessionStart', 'j1', Date.now(), jadePid.pid);
+    const jade = serverFor(repo, { CLAUDE_CODE_SESSION_ID: 'j1' }, SHIM);
+    assert.equal(await jade.text('create_task', { title: 'Cache photos', requestedByHuman: true }), 'Created #1 — Ready.');
+    assert.equal(lastEvent(repo).actor, 'j1');
+    assert.equal(readRegistry(openBoard(repo)).agents.j1.pid, jadePid.pid); // the hooks' pid, not the launcher's
+    const amber = toolsFor(repo, 'a1', { pid: process.pid, clock: { t: Date.now() } });
+    amber.call('create_task', { title: 'Filter by prep time', requestedByHuman: true });
+    amber.call('claim_task', { id: 2 });
+    amber.call('post_message', { taskId: 2, kind: 'question', to: 'Jade', text: 'Is the CSV schema final?' });
+    hook(repo, 'SessionEnd', 'j1', Date.now(), jadePid.pid, { reason: 'clear' });
+    const brief = context(hook(repo, 'SessionStart', 'j2', Date.now(), jadePid.pid, { source: 'clear' }));
+    assert.match(brief, /you are agent Jade/);
+    assert.match(brief, /\n#2 · Amber asks you: "Is the CSV schema final\?"/);
+    jade.close();
+  } finally {
+    jadePid.kill();
+  }
+});
+
+test('behind a launcher, /clear with SessionStart before SessionEnd still ends the old session, which the new one takes the claim from', async () => {
+  const repo = tempRepo();
+  hook(repo, 'SessionStart', 's1', Date.now(), process.pid);
+  const server = serverFor(repo, { CLAUDE_CODE_SESSION_ID: 's1' }, SHIM);
+  assert.equal(await server.text('create_task', { title: 'Filter by prep time', requestedByHuman: true }), 'Created #1 — Ready.');
+  assert.match(await server.text('claim_task', { id: 1 }), /^You now hold #1\./);
+  const brief = context(hook(repo, 'SessionStart', 's3', Date.now(), process.pid, { source: 'clear' }));
+  assert.notEqual(readRegistry(openBoard(repo)).agents.s1.endedAt, null);
+  assert.match(brief, /Your task: #1 Filter by prep time/);
+  assert.equal(readState(openBoard(repo)).tasks[1].assignee, 's3');
+  hook(repo, 'SessionEnd', 's1', Date.now(), process.pid, { reason: 'clear' });
+  assert.match(await server.text('post_message', { taskId: 1, kind: 'comment', text: 'Picking this up again.' }), /^Posted comment m\d+ on #1\.$/);
+  assert.equal(lastEvent(repo).actor, 's3');
+  server.close();
 });
 
 test('the server acts as the agent the hooks registered for the same host process, touching it with its own pid and host', () => {

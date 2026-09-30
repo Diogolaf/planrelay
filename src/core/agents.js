@@ -34,23 +34,31 @@ export function currentHost(env = process.env) {
 }
 
 /**
+ * CLAUDE_PID, the pid of the Claude Code process, when it is a whole number above 0; else null.
+ * @param {Record<string, string | undefined>} [env] @returns {number | null}
+ */
+export function claudePid(env = process.env) {
+  const n = Number(env.CLAUDE_PID);
+  return Number.isInteger(n) && n > 0 ? n : null;
+}
+
+/**
  * The pid of the Claude Code process an agent runs in (§4 Identity), the same for its hooks and
- * its MCP server: CLAUDE_PID when it is a whole number above 0, else `ppid`, this process's parent.
+ * its MCP server: CLAUDE_PID when it is a whole number above 0 (claudePid), else `ppid`, this process's parent.
  * Claude Code sets CLAUDE_PID for hooks but not for MCP servers (seen in Claude Code 2.1.247).
  * The fallback assumes Claude Code starts hooks and the MCP server in exec form (`command` plus
  * `args`, as hooks/hooks.json and .mcp.json declare them), with no shell or launcher in between,
  * so the parent is the Claude Code process itself; in a real session, the parent pid of both
  * equalled the hooks' CLAUDE_PID. A launcher in between (a Volta or Scoop shim) gives its own pid
- * instead; resolveAgentId's folder step still finds the session after /clear.
+ * instead; resolveAgentId's folder step still finds the session after /clear, and the MCP server
+ * never stores a pid that came from its parent (mcp/tools.js).
  * Null when neither is usable; a parent of 1 or less (none, or init after the parent exited) is
  * not a session's process.
  * @param {Record<string, string | undefined>} [env] @param {number} [ppid]
  * @returns {number | null}
  */
 export function hostPid(env = process.env, ppid = process.ppid) {
-  const n = Number(env.CLAUDE_PID);
-  if (Number.isInteger(n) && n > 0) return n;
-  return Number.isInteger(ppid) && ppid > 1 ? ppid : null;
+  return claudePid(env) ?? (Number.isInteger(ppid) && ppid > 1 ? ppid : null);
 }
 
 /**

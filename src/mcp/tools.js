@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import { NAME } from '../name.js';
-import { currentHost, getAgent, hostPid, nameOf, resolveAgentId, touchAgent } from '../core/agents.js';
+import { claudePid, currentHost, getAgent, hostPid, nameOf, resolveAgentId, touchAgent } from '../core/agents.js';
 import { loadConfig } from '../core/config.js';
 import { COLUMN_LABELS, COLUMNS, columnOf } from '../core/derive.js';
 import { maintenance } from '../core/maintenance.js';
@@ -25,9 +25,11 @@ import { createHandler, serveStdio } from './protocol.js';
  *
  * @typedef {import('../core/store.js').Board} Board
  * @typedef {import('../core/store.js').Registry} Registry
- * @typedef {{ sessionId?: string | null, pid?: number | null, folder: string, host?: string, now?: () => number }} Who
- *   sessionId: CLAUDE_CODE_SESSION_ID; pid: the host process (hostPid()); folder: the board's root
- *   folder; host: currentHost() of this process
+ * @typedef {{ sessionId?: string | null, pid?: number | null, pidFromParent?: boolean, folder: string, host?: string,
+ *   now?: () => number }} Who
+ *   sessionId: CLAUDE_CODE_SESSION_ID; pid: the host process (hostPid()); pidFromParent: true when pid
+ *   is only the parent process (no CLAUDE_PID), which a launcher makes its own: it then matches
+ *   agents but is never stored on one; folder: the board's root folder; host: currentHost() of this process
  */
 
 function packageVersion() {
@@ -193,6 +195,8 @@ export function buildTools(board, who) {
   const host = who.host ?? currentHost();
   const sessionId = typeof who.sessionId === 'string' && who.sessionId !== '' ? who.sessionId : null;
   const pid = Number.isInteger(who.pid) && /** @type {number} */ (who.pid) > 0 ? /** @type {number} */ (who.pid) : null;
+  /** The pid stored on the acting agent: none when it is only a guess; the hooks store the real one. */
+  const ownPid = who.pidFromParent ? null : pid;
   /** The agent this server last acted for: kept only while it is live, for when no rule below decides. */
   let lastId = null;
 
@@ -210,17 +214,17 @@ export function buildTools(board, who) {
   }
 
   /**
-   * Registers or refreshes the acting agent before an operation (§10), with this server's own pid
-   * and host only (§4). No live agent: a new one under the session id (or a process-based id), but
-   * never one whose session ended. That happens after /clear, until the new session's hooks
-   * register it, so the agent is told to try again.
+   * Registers or refreshes the acting agent before an operation (§10), with this server's own host,
+   * and its own pid only when CLAUDE_PID gave it (§4). No live agent: a new one under the session
+   * id (or a process-based id), but never one whose session ended. That happens after /clear,
+   * until the new session's hooks register it, so the agent is told to try again.
    */
   function identify(state, reg, t) {
     const live = liveAgent(reg, t);
     const id = live ?? sessionId ?? `mcp-${process.pid}`;
     const known = getAgent(reg, id);
     if (!live && known && known.endedAt != null) throw new BoardError(NOT_REGISTERED);
-    touchAgent(reg, { id, folder: known ? null : who.folder, pid, host, seq: state.seq }, t);
+    touchAgent(reg, { id, folder: known ? null : who.folder, pid: ownPid, host, seq: state.seq }, t);
     return id;
   }
 
@@ -439,7 +443,8 @@ function unavailableServer(folder, err) {
 /**
  * Entry point for `agentboard mcp`: serves the board of the session's project over stdio until
  * the client closes its input. Identity comes from CLAUDE_CODE_SESSION_ID and the host process
- * (hostPid: CLAUDE_PID, which Claude Code does not give MCP servers, else the parent process) (§4).
+ * (hostPid: CLAUDE_PID, which Claude Code does not give MCP servers, else the parent process,
+ * which then only matches agents and is never stored) (§4).
  * It never fails at startup: when the board cannot be opened, the server still answers, and
  * every tool says why (unavailableServer); the reason also goes to stderr, the host's MCP log.
  * @param {{ env?: Record<string, string | undefined>, cwd?: string, input?: NodeJS.ReadableStream,
@@ -465,6 +470,7 @@ export function startMcpServer({
   const who = {
     sessionId: env.CLAUDE_CODE_SESSION_ID || null,
     pid: hostPid(env, ppid),
+    pidFromParent: claudePid(env) === null,
     folder: board.repoRoot,
     host: currentHost(env),
   };
