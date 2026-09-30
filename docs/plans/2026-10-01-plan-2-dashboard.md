@@ -1185,4 +1185,6 @@ Not in this plan (plan 3): npm packaging and `files` allowlist update for `src/d
 
 ## Execution notes
 
-(Filled in during execution, as in plan 1.)
+- **Task 1 (done):** the mockups are in `docs/design/mockups/` as canvas templates (markup with `{{…}}` bindings plus a data script at the bottom; they do not render on their own). The spec records decisions 1–9.
+- **Task 2 (done, approved):** SCHEMA 3 rebuilds older boards by replay; `logHealth` never flags a batch a writer is still appending.
+- **Must-do for Task 9 (banner):** `repair` rebuilds the derived files but never removes bad lines from `events.jsonl`, so the banner must not present repair as the fix. Wording: "N lines of the board's log could not be read and were skipped.", with a dismiss button remembered per count in `localStorage` (a new bad line shows it again). Wrap every `localStorage` access in try/catch.
