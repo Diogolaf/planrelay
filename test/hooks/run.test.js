@@ -246,6 +246,38 @@ test('SessionEnd marks the agent gone and leaves its claim with the folder', () 
   assert.equal(readState(board).tasks[1].assignee, 's1');
 });
 
+test('two worktrees of one repository: one board, each worktree inherits its own claim, and locks span worktrees', () => {
+  const repo = tempRepo();
+  const wt = path.join(tempDir(), 'photos');
+  execFileSync('git', ['worktree', 'add', '-q', '-b', 'photos', wt], { cwd: repo, env: gitEnv(), stdio: 'ignore' });
+  hook(repo, 'SessionStart', 's1');
+  hook(wt, 'SessionStart', 's2');
+  assert.equal(openBoard(wt).dir, path.join(repo, '.git', 'agentboard'));
+  assert.equal(openBoard(repo).dir, path.join(repo, '.git', 'agentboard'));
+  asAgent(repo, 's1', createTask, { title: 'Filter by prep time', requestedByHuman: true });
+  asAgent(repo, 's1', createTask, { title: 'Cache photos', requestedByHuman: true });
+  asAgent(repo, 's1', claimTask, { id: 1 });
+  asAgent(wt, 's2', claimTask, { id: 2 });
+  const claims = readState(openBoard(wt)).tasks;
+  assert.deepEqual([claims[1].claim.folder, claims[2].claim.folder], [repo, wt]);
+  // the same file, edited in the other worktree, is locked: a file is its path inside the repository (§10)
+  hook(wt, 'PostToolUse', 's2', { tool_name: 'Edit', tool_input: { file_path: path.join(wt, 'src', 'cache.js') } }, T0 + MIN);
+  const out = hook(repo, 'PreToolUse', 's1', { tool_name: 'Edit', tool_input: { file_path: path.join(repo, 'src', 'cache.js') } }, T0 + 2 * MIN);
+  const decision = JSON.parse(out).hookSpecificOutput;
+  assert.equal(decision.permissionDecision, 'deny');
+  assert.match(decision.permissionDecisionReason, /^src\/cache\.js is being edited by Jade on #2\. /);
+  // both sessions end, the main checkout's last; each new session takes its own worktree's claim, not the latest one
+  hook(wt, 'SessionEnd', 's2', { reason: 'prompt_input_exit' }, T0 + 3 * MIN);
+  hook(repo, 'UserPromptSubmit', 's1', { prompt: 'go on' }, T0 + 4 * MIN);
+  hook(repo, 'SessionEnd', 's1', { reason: 'prompt_input_exit' }, T0 + 5 * MIN);
+  const inWt = context(hook(wt, 'SessionStart', 's3', {}, T0 + 6 * MIN, envOf('s1')));
+  const inRepo = context(hook(repo, 'SessionStart', 's4', {}, T0 + 7 * MIN, envOf('s2')));
+  assert.match(inWt, /you are agent Jade[\s\S]*Your task: #2 Cache photos/);
+  assert.match(inRepo, /you are agent Amber[\s\S]*Your task: #1 Filter by prep time/);
+  const state = readState(openBoard(repo));
+  assert.deepEqual([state.tasks[1].assignee, state.tasks[2].assignee], ['s4', 's3']);
+});
+
 test('a deleted worktree: its hooks keep working, and its claim is released once the folder stays gone', () => {
   const repo = tempRepo();
   const wt = path.join(repo, '.worktrees', 'photos');
