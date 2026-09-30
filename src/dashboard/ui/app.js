@@ -1,5 +1,6 @@
 import { h } from './dom.js';
 import { plural } from './format.js';
+import { board } from './views/board.js';
 import { overview } from './views/overview.js';
 
 /**
@@ -29,8 +30,9 @@ import { overview } from './views/overview.js';
  * Rendering the main area (renderMain). With agents at work, live loads come every few seconds, so a
  * render must not get in the user's way:
  * - it waits while the user is in the middle of something in the main area: a <select> there was
- *   pressed and has not fired change or focusout yet, or a text selection lies there. It runs when
- *   that ends. A route change renders at once.
+ *   pressed, or opened from the keyboard (Space, F4, Alt+Up or Alt+Down), and has not fired change
+ *   or focusout yet, or a text selection lies there. It runs when that ends. A route change renders
+ *   at once.
  * - it keeps the focus on the element with the same `data-key`, and the scroll position of every
  *   element with a `data-scroll-key`.
  *
@@ -42,8 +44,10 @@ import { overview } from './views/overview.js';
  *   params: the hash's query as strings (#/board?epic=3 gives { epic: '3' }); id: the task view's task
  * @typedef {{ id: number, data: any, error: string | null }} TaskLoad
  *   data: /api/task/<id> once loaded, else null; error: the server's message for a missing task
- * @typedef {{ view: any, route: Route, now: number, task: TaskLoad | null }} ViewContext
- *   view: /api/view; task: on the task route only
+ * @typedef {{ view: any, route: Route, now: number, task: TaskLoad | null, rerender: () => void }} ViewContext
+ *   view: /api/view; task: on the task route only; rerender: builds the current view again, as a
+ *   load does (it waits while the user is interacting), for state a view keeps itself, such as the
+ *   answer of its own request or a list it opened
  * @typedef {(ctx: ViewContext) => Node | Node[]} View
  *   A view returns the main area's content. It is called again on every load and every 30 s, so:
  *   - it keeps no state in the DOM that a render would lose (a module-level map, if it must);
@@ -59,7 +63,6 @@ const TICK_MS = 30_000;
 const RECONNECT_MS = 5_000;
 /** localStorage key prefix of the dismissed malformed-lines count, per project. */
 const DISMISSED_KEY = 'agentboard.badLinesDismissed:';
-const COLUMNS = [['backlog', 'Backlog'], ['ready', 'Ready'], ['in_progress', 'In progress'], ['blocked', 'Blocked'], ['done', 'Done']];
 
 /**
  * The route of a location hash.
@@ -78,22 +81,11 @@ export function parseRoute(hash) {
 }
 
 // ------------------------------------------------------------------------------------------------
-// Views: views/*.js, and placeholders until board.js, activity.js and task.js replace them
+// Views: views/*.js, and placeholders until activity.js and task.js replace them
 // ------------------------------------------------------------------------------------------------
 
 /** @param {string} title @returns {View} */
 const placeholder = (title) => () => h('div', { class: 'page' }, h('h1', { class: 'page-title' }, title));
-
-/** @type {View} The Board's column headers, with their counts. */
-function boardPlaceholder({ view }) {
-  return h('div', { class: 'page' },
-    h('h1', { class: 'page-title' }, 'Board'),
-    h('div', { class: 'columns' }, COLUMNS.map(([key, label]) => h('section', { class: 'column', 'data-testid': `column-${key}` },
-      h('div', { class: 'column-head' },
-        h('span', { class: `dot dot-${key}` }),
-        h('h2', { class: 'column-name' }, label.toUpperCase()),
-        h('span', { class: 'column-count', 'data-testid': 'column-count' }, view.counts?.[key] ?? 0))))));
-}
 
 /** @type {View} */
 function taskPlaceholder({ task }) {
@@ -106,7 +98,7 @@ function taskPlaceholder({ task }) {
 /** @type {Record<RouteName, View>} */
 const VIEWS = {
   overview,
-  board: boardPlaceholder,
+  board,
   activity: placeholder('Activity'),
   task: taskPlaceholder,
 };
@@ -244,7 +236,7 @@ function renderMain(force = false) {
   const { view, route } = state;
   if (!view) return void replaceMain([h('div', { class: 'page' }, h('p', { class: 'page-note' }, 'Loading the board'))]);
   try {
-    const out = VIEWS[route.name]({ view, route, now: now(), task: route.name === 'task' ? state.task : null });
+    const out = VIEWS[route.name]({ view, route, now: now(), task: route.name === 'task' ? state.task : null, rerender: () => renderMain() });
     replaceMain([out].flat());
   } catch (err) {
     console.error(err);
@@ -380,6 +372,10 @@ document.addEventListener('visibilitychange', () => {
 els.main.addEventListener('pointerdown', (e) => {
   const select = e.target instanceof Element ? e.target.closest('select') : null;
   if (select) state.pressedSelect = select;
+});
+els.main.addEventListener('keydown', (e) => {
+  const opens = e.key === ' ' || e.key === 'F4' || (e.altKey && (e.key === 'ArrowDown' || e.key === 'ArrowUp'));
+  if (opens && e.target instanceof HTMLSelectElement) state.pressedSelect = e.target;
 });
 for (const type of ['change', 'focusout']) {
   els.main.addEventListener(type, (e) => {
