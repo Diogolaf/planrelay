@@ -237,6 +237,22 @@ test('PostToolUse mirrors todos and records files inside the repository only', (
   assert.equal(readRegistry(board).activity[1], T0);
 });
 
+test('PostToolUse records the last file the agent edited', () => {
+  const repo = tempRepo();
+  hook(repo, 'SessionStart', 's1');
+  hook(repo, 'PostToolUse', 's1', { tool_name: 'Edit', tool_input: { file_path: path.join(repo, 'src', 'filters', 'diet.js') } }, T0 + MIN);
+  const board = openBoard(repo);
+  let agent = readRegistry(board).agents.s1;
+  assert.equal(agent.lastFile, 'src/filters/diet.js');
+  assert.equal(agent.lastFileAt, T0 + MIN);
+  assert.equal(agent.lastSeen, T0 + MIN);
+  // a file outside the repository, or another tool, leaves it as it was
+  hook(repo, 'PostToolUse', 's1', { tool_name: 'Write', tool_input: { file_path: path.join(tempDir(), 'notes.md') } }, T0 + 2 * MIN);
+  hook(repo, 'PostToolUse', 's1', { tool_name: 'TodoWrite', tool_input: { todos: [] } }, T0 + 3 * MIN);
+  agent = readRegistry(board).agents.s1;
+  assert.deepEqual([agent.lastFile, agent.lastFileAt, agent.lastSeen], ['src/filters/diet.js', T0 + MIN, T0 + 3 * MIN]);
+});
+
 test('SessionEnd marks the agent gone and leaves its claim with the folder', () => {
   const repo = tempRepo();
   hook(repo, 'SessionStart', 's1');

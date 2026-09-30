@@ -15,11 +15,13 @@ export const PALETTE = Object.freeze([
  * An agent in the registry. host: where it runs (currentHost()), null when never recorded;
  * cursor: the board sequence number up to which it has been shown updates (§5 Agent, §9), never a
  * time, since times can arrive out of commit order; prevCursor: the cursor before its last
- * advance, so a batch cut off by the ping cap can be shown again; endedAt: null while live.
- * The registry reader drops a cursor or prevCursor that is not a whole number of 0 or more.
+ * advance, so a batch cut off by the ping cap can be shown again; endedAt: null while live;
+ * lastFile, lastFileAt: the repository path of the last file it edited, and when (the PostToolUse hook).
+ * The registry reader drops a cursor or prevCursor that is not a whole number of 0 or more, a
+ * lastFile that is not text of 1 to 1,000 characters and a lastFileAt that is not a finite number.
  * @typedef {{ id: string, name: string, color: string, folder: string | null, pid: number | null,
  *   host: string | null, branch: string | null, firstSeen: number, lastSeen: number, cursor?: number,
- *   prevCursor?: number, endedAt: number | null }} Agent
+ *   prevCursor?: number, endedAt: number | null, lastFile?: string, lastFileAt?: number }} Agent
  * @typedef {import('./store.js').Registry} Registry
  */
 

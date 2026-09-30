@@ -184,14 +184,17 @@ function todoItems(todos) {
   return todos.map((t) => ({ text: t?.content, done: t?.status === 'completed' }));
 }
 
-/** PostToolUse: records an edited file (§9, §10) or mirrors the todo list into the claimed task. @param {HookCall} h */
+/**
+ * PostToolUse: records an edited file (§9, §10), also as the agent's lastFile for the dashboard, or
+ * mirrors the todo list into the claimed task. @param {HookCall} h
+ */
 function postToolUse(h) {
   const { board, input, id, now } = h;
   const tool = input.tool_name;
   const todo = tool === 'TodoWrite';
   if (!todo && !EDIT_TOOLS.has(tool)) return '';
   transact(board, (state, reg) => {
-    touch(h, reg, state.seq);
+    const agent = touch(h, reg, state.seq);
     const ctx = { state, reg, cfg: board.config, agentId: id, now };
     const events = [];
     if (todo) {
@@ -202,6 +205,8 @@ function postToolUse(h) {
       if (file) {
         recordTouch(reg, { agentId: id, taskId: claimedBy(state, id)?.id ?? null, file: lockKey(file), now });
         events.push(...touchTaskFile(ctx, file).events);
+        agent.lastFile = file;
+        agent.lastFileAt = now;
       }
     }
     return { events, registry: reg };

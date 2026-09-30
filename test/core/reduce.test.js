@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  applyEvent, emptyState, isEvent, newTask, snippet, FILES_LIMIT, RECENT_LIMIT, MESSAGE_RING,
+  applyEvent, emptyState, isEvent, newTask, snippet, FILES_LIMIT, RECENT_LIMIT, MESSAGE_RING, SCHEMA,
 } from '../../src/core/reduce.js';
 import { T0 } from '../helpers.js';
 
@@ -542,6 +542,21 @@ test("message headers carry the author's display name", () => {
   applyEvent(s, msg('m4', 1, 'comment', { authorName: ['Amber'] }));
   applyEvent(s, msg('m5', 1, 'system', { author: 'system', authorName: '' }));
   assert.deepEqual(s.messages.map((m) => m.authorName), ['Amber', null, null, null, null]);
+});
+
+test('activity entries keep the actor name stored with the event', () => {
+  const s = emptyState();
+  applyEvent(s, { seq: 1, tx: 1, n: 1, at: 5, type: 'task.created', actor: 'a1', actorName: 'Amber',
+    data: { task: { id: 1, kind: 'task', title: 'T', origin: 'agent', createdBy: 'a1', approved: false, rank: 1 } } });
+  assert.equal(s.recent[0].actorName, 'Amber');
+  applyEvent(s, { seq: 2, tx: 2, n: 1, at: 6, type: 'task.approved', actor: 'a2', data: { id: 1, approved: true } });
+  assert.equal(s.recent[1].actorName, null); // no name in the event: null, never undefined
+  applyEvent(s, { seq: 3, tx: 3, n: 1, at: 7, type: 'task.claimed', actor: 'a3', actorName: ['Jade'], data: { id: 1, agent: 'a3' } });
+  assert.equal(s.recent[2].actorName, null); // not a display name
+});
+
+test('SCHEMA is 3: activity entries carry actorName', () => {
+  assert.equal(SCHEMA, 3);
 });
 
 test('duplicate dependsOn ids are collapsed, on create and on update', () => {

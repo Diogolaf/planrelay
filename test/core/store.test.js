@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
-  openBoard, transact, readState, readMessages, readRegistry, repair, replay, messagesFile,
+  openBoard, transact, readState, readMessages, readRegistry, repair, replay, messagesFile, logHealth,
 } from '../../src/core/store.js';
 import { samePath } from '../../src/core/paths.js';
 import { PALETTE, touchAgent } from '../../src/core/agents.js';
@@ -61,6 +61,22 @@ test('every event of one write carries its batch: tx is the first seq, n the siz
   assert.deepEqual(logLines(b).map((l) => JSON.parse(l)).map((e) => [e.seq, e.tx, e.n]), [[1, 1, 1], [2, 2, 3], [3, 2, 3], [4, 2, 3]]);
 });
 
+test('transact stamps each event with its actor display name', () => {
+  const repo = tempRepo();
+  const board = openBoard(repo);
+  transact(board, (state, reg, t) => {
+    touchAgent(reg, { id: 'a1', folder: repo, seq: state.seq }, t);
+    return { registry: reg, events: [
+      { type: 'task.created', actor: 'a1', data: { task: { id: 1, kind: 'task', title: 'T', origin: 'agent', createdBy: 'a1', approved: false, rank: 1 } } },
+      { type: 'task.released', actor: 'system', data: { id: 1, reason: 'timeout' } },
+    ] };
+  }, { now: T0 });
+  const lines = logLines(board).map((l) => JSON.parse(l));
+  assert.equal(lines[0].actorName, 'Amber');
+  assert.equal(lines[1].actorName, null);
+  assert.deepEqual(readState(board).recent.map((r) => r.actorName), ['Amber', null]);
+});
+
 test('messages get ids and land in their task file', () => {
   const b = openBoard(tempRepo());
   transact(b, () => ({ events: [createEv(1)] }));
@@ -101,18 +117,27 @@ test('an unreadable or misshapen snapshot is rebuilt from the log', () => {
 
 test('a snapshot of an older schema is not trusted: readers replay the log, and the next write saves the current shape', () => {
   const b = openBoard(tempRepo());
-  transact(b, () => ({ events: [createEv(1), post(1, 'Started on the filter.')] }));
+  transact(b, (s, reg, now) => {
+    touchAgent(reg, { id: 'a1', seq: s.seq }, now);
+    return { registry: reg, events: [createEv(1), post(1, 'Started on the filter.')] };
+  });
   const snap = JSON.parse(fs.readFileSync(b.files.state, 'utf8'));
   assert.equal(snap.schema, SCHEMA);
-  // as schema 1 saved it: message ring entries without their seq; it matches the log otherwise
-  const old = { ...snap, schema: 1, messages: snap.messages.map(({ seq, ...m }) => m) };
-  assert.equal(old.eventsSize, fs.statSync(b.files.events).size);
-  fs.writeFileSync(b.files.state, JSON.stringify(old));
-  assert.deepEqual(readState(b).messages.map((m) => m.seq), [2]);
+  assert.equal(snap.eventsSize, fs.statSync(b.files.events).size);
+  // as older schemas saved it, matching the log otherwise: activity entries without actorName (1 and 2),
+  // message ring entries without their seq (1)
+  const recent = snap.recent.map(({ actorName, ...r }) => r);
+  for (const old of [{ ...snap, schema: 1, recent, messages: snap.messages.map(({ seq, ...m }) => m) }, { ...snap, schema: 2, recent }]) {
+    fs.writeFileSync(b.files.state, JSON.stringify(old));
+    const s = readState(b);
+    assert.deepEqual(s.messages.map((m) => m.seq), [2]);
+    assert.deepEqual(s.recent.map((r) => r.actorName), ['Amber']);
+  }
   transact(b, () => ({ events: [post(1, 'Next: the screen.')] }));
   const saved = JSON.parse(fs.readFileSync(b.files.state, 'utf8'));
   assert.equal(saved.schema, SCHEMA);
   assert.deepEqual(saved.messages.map((m) => m.seq), [2, 3]);
+  assert.deepEqual(saved.recent.map((r) => r.actorName), ['Amber']);
 });
 
 test('malformed and partial lines are skipped, and later appends stay intact', () => {
@@ -154,6 +179,26 @@ test('a torn batch at the end of the log is ignored and reported', () => {
   assert.deepEqual(bad, [2, 3]);
   assert.deepEqual(Object.keys(state.tasks), ['1', '2']);
   assert.deepStrictEqual(readState(b), replay(b, { messages: false }).state);
+});
+
+test('logHealth counts malformed lines but not a batch still being written at the end', () => {
+  const repo = tempRepo();
+  const board = openBoard(repo);
+  assert.deepEqual(logHealth(board), { badLines: 0 }); // no log yet
+  transact(board, () => ({ events: [{ type: 'task.created', actor: 'h', data: { task: { id: 1, kind: 'task', title: 'A', rank: 1 } } }] }), { now: T0 });
+  assert.deepEqual(logHealth(board), { badLines: 0 });
+  fs.appendFileSync(board.files.events, 'not json\n');
+  assert.deepEqual(logHealth(board), { badLines: 1 });
+  // the first line of a two-event batch whose second line has not arrived yet: still being written
+  const approve = (seq, n) => `${JSON.stringify({ seq, tx: seq, n, at: T0, type: 'task.approved', actor: 'h', data: { id: 1, approved: true } })}\n`;
+  fs.appendFileSync(board.files.events, approve(3, 2));
+  assert.deepEqual(logHealth(board), { badLines: 1 });
+  // a later write shows it was cut short (a crash): now it counts, like the other bad lines repair reports
+  transact(board, () => ({ events: [{ type: 'task.approved', actor: 'h', data: { id: 1, approved: false } }] }), { now: T0 });
+  assert.deepEqual(logHealth(board), { badLines: 2 });
+  fs.appendFileSync(board.files.events, approve(3, 2));
+  assert.deepEqual(logHealth(board), { badLines: 2 });
+  assert.deepEqual(repair(board).bad, [2, 3, 5]);
 });
 
 test('a failed append is truncated back, so no part of the batch stays in the log', (t) => {
@@ -593,6 +638,25 @@ test('agent cursors are board sequence numbers: an unusable cursor or prevCursor
   const a1 = readRegistry(b).agents.a1;
   assert.equal(Object.getPrototypeOf(a1), Object.prototype);
   assert.deepEqual([Object.hasOwn(a1, 'cursor'), a1.cursor], [false, undefined]);
+});
+
+test('the registry reader drops an unusable lastFile', () => {
+  const repo = tempRepo();
+  const board = openBoard(repo);
+  fs.mkdirSync(board.dir, { recursive: true });
+  fs.writeFileSync(board.files.agents, JSON.stringify({ agents: {
+    a1: { id: 'a1', name: 'Amber', color: '#A45F00', lastFile: 42, lastFileAt: 'x' },
+    a2: { id: 'a2', name: 'Jade', color: '#17735A', lastFile: 'src/app.js', lastFileAt: T0 },
+    a3: { id: 'a3', name: 'Cobalt', color: '#2F4DB5', lastFile: '', lastFileAt: null },
+    a4: { id: 'a4', name: 'Plum', color: '#7A3E8E', lastFile: 'x'.repeat(1001), lastFileAt: String(T0) },
+  } }));
+  const reg = readRegistry(board);
+  for (const id of ['a1', 'a3', 'a4']) {
+    assert.equal(Object.hasOwn(reg.agents[id], 'lastFile'), false);
+    assert.equal(Object.hasOwn(reg.agents[id], 'lastFileAt'), false);
+  }
+  assert.equal(reg.agents.a2.lastFile, 'src/app.js');
+  assert.equal(reg.agents.a2.lastFileAt, T0);
 });
 
 test('the registry reader gives every agent a usable, unique name and a #rrggbb color, the same on every read', () => {

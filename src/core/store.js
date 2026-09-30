@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { NAME } from '../name.js';
-import { repairIdentities } from './agents.js';
+import { getAgent, repairIdentities } from './agents.js';
 import { readConfig } from './config.js';
 import {
   appendLine, fileSize, isBusyError, readJson, readLines, retryWhileBusy, writeFileAtomic, writeJsonAtomic,
@@ -76,10 +76,19 @@ const REGISTRY_ENTRY = {
 /** Agent fields that hold a board sequence number (agents.js Agent): a whole number of 0 or more. */
 const SEQ_FIELDS = ['cursor', 'prevCursor'];
 
-/** A kept agent, copied, without a cursor or prevCursor that is not a sequence number. */
+/** The longest lastFile kept (agents.js Agent); a longer one is dropped on read. */
+const LAST_FILE_MAX = 1000;
+
+/**
+ * A kept agent, copied, without a cursor or prevCursor that is not a sequence number, a lastFile
+ * that is not a repository path (text of 1 to LAST_FILE_MAX characters), or a lastFileAt that is not a time.
+ */
 function cleanAgent(a) {
   const out = { ...a }; // spread defines own properties, so a "__proto__" key stays an ordinary one
   for (const k of SEQ_FIELDS) if (Object.hasOwn(out, k) && !(Number.isSafeInteger(out[k]) && out[k] >= 0)) delete out[k];
+  const f = out.lastFile;
+  if (Object.hasOwn(out, 'lastFile') && !(typeof f === 'string' && f !== '' && f.length <= LAST_FILE_MAX)) delete out.lastFile;
+  if (Object.hasOwn(out, 'lastFileAt') && !Number.isFinite(out.lastFileAt)) delete out.lastFileAt;
   return out;
 }
 
@@ -90,9 +99,10 @@ const REGISTRY_CLEAN = { agents: cleanAgent };
  * The saved registry. A missing, corrupt or misshapen part reads as empty, and malformed entries
  * are dropped (an agent or touch that is not an object, an activity time that is not a number, an
  * agent with an empty id), so one bad entry can never make every write throw. An agent's cursor or
- * prevCursor that is not a sequence number is dropped, and the agent kept. Every agent gets a
- * usable, unique name and a #rrggbb color (agents.repairIdentities), so no name that is not text
- * ever reaches a message or an event. Other top-level keys are kept. @param {Board} board @returns {Registry}
+ * prevCursor that is not a sequence number, or an unusable lastFile or lastFileAt, is dropped, and
+ * the agent kept (cleanAgent). Every agent gets a usable, unique name and a #rrggbb color
+ * (agents.repairIdentities), so no name that is not text ever reaches a message or an event.
+ * Other top-level keys are kept. @param {Board} board @returns {Registry}
  */
 export function readRegistry(board) {
   const r = readJson(board.files.agents, null);
@@ -150,8 +160,9 @@ function frameOf(ev) {
  * @param {BoardState} state
  * @param {Buffer} buf
  * @param {{ atFileStart?: boolean, onMessage?: ((m: any) => void) | null }} [opts]
- * @returns {{ end: number, bad: number[], orphan: boolean }} end: bytes consumed; bad: 1-based line
- *   numbers within buf; orphan: some batch continues without its first event (it began before buf)
+ * @returns {{ end: number, bad: number[], orphan: boolean, tail: number }} end: bytes consumed; bad: 1-based
+ *   line numbers within buf; orphan: some batch continues without its first event (it began before buf);
+ *   tail: how many of the bad lines are an incomplete batch at the very end (the last ones), else 0
  */
 function applyLines(state, buf, { atFileStart = false, onMessage = null } = {}) {
   const end = buf.lastIndexOf(NEWLINE) + 1;
@@ -202,8 +213,12 @@ function applyLines(state, buf, { atFileStart = false, onMessage = null } = {}) 
       if (batch.n === 1) close();
     }
   });
-  if (batch) bad.push(...batch.lines); // incomplete at the end: a write cut short, or still being written
-  return { end, bad, orphan };
+  let tail = 0;
+  if (batch) { // incomplete at the end: a write cut short, or still being written
+    bad.push(...batch.lines);
+    tail = batch.lines.length;
+  }
+  return { end, bad, orphan, tail };
 }
 
 /** The log's bytes, or an empty buffer when it does not exist. Any other error is thrown. */
@@ -232,6 +247,16 @@ export function replay(board, opts = {}) {
   const { end, bad } = applyLines(state, readLog(board.files.events), { atFileStart: true, onMessage });
   state.eventsSize = end; // the bytes replayed, never a second size check
   return { state, bad, messages };
+}
+
+/**
+ * Problems a reader can report without the lock (§16): the number of malformed lines in the log,
+ * leaving out a batch still incomplete at the very end (a writer may be appending it right now;
+ * `repair` reports those). Never writes. @param {Board} board @returns {{ badLines: number }}
+ */
+export function logHealth(board) {
+  const { bad, tail } = applyLines(emptyState(), readLog(board.files.events), { atFileStart: true });
+  return { badLines: bad.length - tail };
 }
 
 /**
@@ -400,8 +425,13 @@ function ensureNewlineAtEnd(file) {
   }
 }
 
-function stamp(e, seq, tx, n, now) {
-  const ev = { seq, tx, n, at: now, type: e.type, actor: e.actor, data: e.data };
+/**
+ * The event as written: its batch, the time and the actor's display name now (null for system and
+ * unknown actors), so history stays readable after the registry forgets the agent (§4).
+ * @param {Registry} registry
+ */
+function stamp(e, seq, tx, n, now, registry) {
+  const ev = { seq, tx, n, at: now, type: e.type, actor: e.actor, actorName: getAgent(registry, e.actor)?.name ?? null, data: e.data };
   const m = e.type === 'message.posted' && isObj(e.data) ? e.data.message : null;
   if (isObj(m)) ev.data = { ...e.data, message: { ...m, id: `m${seq}`, at: now } };
   return ev;
@@ -437,7 +467,7 @@ function prepare(board, state, fn, before, now) {
       }
       // Round-trip through JSON so what is applied now is exactly what a replay of the log would build.
       // n is provisional: it is set on every event once the batch is complete.
-      const ev = JSON.parse(JSON.stringify(stamp(e, tx + events.length, tx, 0, now)));
+      const ev = JSON.parse(JSON.stringify(stamp(e, tx + events.length, tx, 0, now, registry)));
       if (!isEvent(ev)) throw new TypeError(`${NAME}: event ${i} returned by transact ${who} is not a valid event; nothing was written`);
       events.push(ev);
       const m = applyTracked(state, ev);

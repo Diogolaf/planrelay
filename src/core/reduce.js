@@ -1,5 +1,5 @@
 /**
- * Names (createdByName, requestedViaName, assigneeName, completedByName, authorName) are display names
+ * Names (createdByName, requestedViaName, assigneeName, completedByName, authorName, actorName) are display names
  * as they were when the event was written, so history stays readable after the registry forgets an agent
  * (§4); null when the event had none. requestedVia: the agent that relayed a task the human asked for.
  * @typedef {{ text: string, done: boolean }} ChecklistItem
@@ -15,7 +15,8 @@
  *   lastHandoff: { author: string | null, at: number | null, kind: string, text: string } | null,
  *   messageCount: number, createdAt: number | null, updatedAt: number | null
  * }} Task
- * @typedef {{ seq: number, at: number | null, type: string, taskId: number, actor: string | null, text: string }} Activity
+ * @typedef {{ seq: number, at: number | null, type: string, taskId: number, actor: string | null, actorName: string | null,
+ *   text: string }} Activity
  * A message ring entry carries its event's seq: sequence numbers grow in commit order, while times can
  * go backwards (a writer reads its clock before it gets the lock), so pings follow seq (§5 Agent cursor).
  * holder: the task's assignee when the message was applied, or null, so news on a task reaches the
@@ -25,11 +26,15 @@
  *   relayedFromHuman: boolean, about: string | null, holder: string | null, at: number | null, text: string }} MessageHeader
  * @typedef {{ schema: number, seq: number, nextId: number, eventsSize: number,
  *   tasks: Record<number, Task>, recent: Activity[], messages: MessageHeader[] }} BoardState
- * @typedef {{ seq: number, at: number, type: string, actor: string, data: any }} BoardEvent
+ * actorName: the actor's display name when the event was written (store.stamp); null for system and unknown actors.
+ * @typedef {{ seq: number, at: number, type: string, actor: string, actorName?: string | null, data: any }} BoardEvent
  */
 
-/** The snapshot's shape. A snapshot of another schema is not trusted: the log is replayed (2: ring entries carry seq). */
-export const SCHEMA = 2;
+/**
+ * The snapshot's shape. A snapshot of another schema is not trusted: the log is replayed
+ * (2: ring entries carry seq; 3: activity entries carry actorName).
+ */
+export const SCHEMA = 3;
 export const RECENT_LIMIT = 500;
 export const MESSAGE_RING = 300;
 /** Files listed per task; touchTaskFile stops recording there, and the UI shows "200+". */
@@ -150,8 +155,9 @@ export function applyEvent(state, ev) {
   const d = isObj(ev.data) ? ev.data : {};
   const at = Number.isFinite(ev.at) ? ev.at : null;
   const actor = strOrNull(ev.actor);
+  const actorName = displayName(ev.actorName) ?? null;
   const log = (type, taskId, text) =>
-    push(state.recent, { seq: ev.seq, at, type, taskId, actor, text: snippet(text) }, RECENT_LIMIT);
+    push(state.recent, { seq: ev.seq, at, type, taskId, actor, actorName, text: snippet(text) }, RECENT_LIMIT);
 
   if (ev.type === 'task.created') {
     const src = d.task;
