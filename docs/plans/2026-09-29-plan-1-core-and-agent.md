@@ -4765,7 +4765,9 @@ Record anything unexpected as a task. Plan 3 runs the full acceptance script.
     - run housekeeping through `transact`'s `before`;
     - always return the registry;
     - add a test showing that a session returning after `claimTimeoutHours` loses its claim at its first prompt and is pinged about it.
-  - **Task 18:** the skill tells the agent to keep its task's checklist with `update_task` `checklist` when it plans steps and as it finishes them (the todo mirror only works where `TodoWrite` exists).
+  - **Task 17 (done):** `get_task` and `claim_task` show the latest handoff or summary, and questions, answers, relayed words and comments among the last 20, in full (capped at 2,000); pings that were cut point to `get_task`.
+  - **Task 18:** the `mcp` command never crashes at startup: if the board cannot be opened (for example no git repository and no `.agentboard/` folder), the server still starts and every tool answers with a clear message saying why. Plugin files follow the current Claude Code plugin docs (check them; `${CLAUDE_PLUGIN_ROOT}` for paths).
+  - **Task 18 (skill):** the skill tells the agent to keep its task's checklist with `update_task` `checklist` when it plans steps and as it finishes them (the todo mirror only works where `TodoWrite` exists).
   - **Task 17:**
     - `update_task` accepts `checklist` (the whole list, `[{ text, done }]`) on the agent's own claimed task, through ops (reuse `syncChecklist`'s cleaning; refuse it on a task the agent does not hold, with a clear message);
     - error messages returned to the agent that quote board text (task titles in `BoardError` messages) put that text inside the `<agentboard-data>` fence, like the PreToolUse denial does;
