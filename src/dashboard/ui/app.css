@@ -1,0 +1,280 @@
+/*
+ * agentboard dashboard styles. Colors, sizes and spacing follow docs/design/mockups/ (the light
+ * tokens are the mockups' colors); the dark theme redefines the same tokens. The CSP allows no
+ * inline style, so every look lives here as a class; a dynamic value (a bar's width, an agent's
+ * color) is set by view code with el.style.setProperty on a custom property.
+ */
+
+/* Fonts: bundled, latin subset (fonts/LICENSE-*.txt, SIL OFL 1.1). */
+@font-face { font-family: 'Instrument Sans'; font-style: normal; font-weight: 400; font-display: swap; src: url(fonts/instrument-sans-latin-400-normal.woff2) format('woff2'); }
+@font-face { font-family: 'Instrument Sans'; font-style: normal; font-weight: 500; font-display: swap; src: url(fonts/instrument-sans-latin-500-normal.woff2) format('woff2'); }
+@font-face { font-family: 'Instrument Sans'; font-style: normal; font-weight: 600; font-display: swap; src: url(fonts/instrument-sans-latin-600-normal.woff2) format('woff2'); }
+@font-face { font-family: 'Instrument Sans'; font-style: normal; font-weight: 700; font-display: swap; src: url(fonts/instrument-sans-latin-700-normal.woff2) format('woff2'); }
+@font-face { font-family: 'JetBrains Mono'; font-style: normal; font-weight: 400; font-display: swap; src: url(fonts/jetbrains-mono-latin-400-normal.woff2) format('woff2'); }
+@font-face { font-family: 'JetBrains Mono'; font-style: normal; font-weight: 500; font-display: swap; src: url(fonts/jetbrains-mono-latin-500-normal.woff2) format('woff2'); }
+
+/* ------------------------------------------------------------------------------------------------
+ * Tokens
+ * ---------------------------------------------------------------------------------------------- */
+
+:root {
+  color-scheme: light;
+  --font-ui: 'Instrument Sans', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+
+  /* surfaces and lines */
+  --bg: #F4F3EF;              /* page */
+  --surface: #FFFFFF;         /* header, cards */
+  --surface-sunken: #FAF9F6;  /* search box */
+  --border: #E3E1DA;          /* card and control borders */
+  --divider: #EFEDE7;         /* rows inside a card */
+  --track: #ECEAE4;           /* progress tracks, board columns, neutral tags */
+
+  /* text */
+  --text: #1D1C1A;
+  --text-body: #2E2C29;       /* long text: descriptions, messages */
+  --text-2: #4F4C46;          /* secondary: tabs, legends */
+  --muted: #5F5C55;           /* notes, ids, times */
+  --faint: #8A867D;           /* dashed "no agent" avatar */
+
+  /* accent: links, the current tab, "In progress" */
+  --link: #2B55C8;
+  --link-hover: #1E3F9A;
+  --accent: #2B55C8;
+  --accent-soft: #E8EEFB;
+  --accent-text: #2B4FB3;
+
+  /* orange family: blocking reasons, Needs you */
+  --warn-soft: #FCEBD9;       /* chips and pills */
+  --warn-text: #8F4306;
+  --warn-tint: #FDF3E7;       /* strips and callouts */
+  --warn-line: #F3D9B8;
+  --warn-chip: #FFF6EC;       /* "Waiting on #12" */
+
+  /* teal and green: Ready, Done */
+  --ready-soft: #DDF1EE;
+  --ready-text: #0B5F58;
+  --done-soft: #E1EFE5;
+  --done-text: #245A38;
+
+  /* column colors: dots, chips, bars */
+  --col-backlog: #8A867D;
+  --col-ready: #0F766E;
+  --col-in-progress: #2B55C8;
+  --col-blocked: #B45309;
+  --col-done: #2F6B45;
+
+  /* the rest */
+  --live: #2F8A55;
+  --offline: #8A867D;
+  --logo-soft: #C9C5BB;
+  --on-agent: #FFFFFF;        /* initials on an agent's color */
+  --you-bg: #1D1C1A;          /* the human's avatar */
+  --you-text: #FFFFFF;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --bg: #161513;
+    --surface: #1F1E1B;
+    --surface-sunken: #1A1917;
+    --border: #36342F;
+    --divider: #2B2A26;
+    --track: #2E2C28;
+
+    --text: #ECEAE4;
+    --text-body: #DAD7D0;
+    --text-2: #BFBBB2;
+    --muted: #A5A198;
+    --faint: #7C786F;
+
+    --link: #8EA9F2;
+    --link-hover: #B6C8F7;
+    --accent: #7393EC;
+    --accent-soft: #25304D;
+    --accent-text: #AFC2F6;
+
+    --warn-soft: #45301B;
+    --warn-text: #F4B67A;
+    --warn-tint: #2D2319;
+    --warn-line: #5C4228;
+    --warn-chip: #33261A;
+
+    --ready-soft: #163A37;
+    --ready-text: #86D6CB;
+    --done-soft: #1C3826;
+    --done-text: #95D3A8;
+
+    --col-backlog: #8F8B82;
+    --col-ready: #2FA99C;
+    --col-in-progress: #6388EA;
+    --col-blocked: #E08B3D;
+    --col-done: #52A771;
+
+    --live: #4CB77A;
+    --offline: #7C786F;
+    --logo-soft: #5A5750;
+    --on-agent: #FFFFFF;
+    --you-bg: #ECEAE4;
+    --you-text: #1D1C1A;
+  }
+}
+
+/* ------------------------------------------------------------------------------------------------
+ * Base
+ * ---------------------------------------------------------------------------------------------- */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 14px;
+  line-height: 1.4;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: var(--link); }
+a:hover { color: var(--link-hover); }
+button, input, select { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.mono { font-family: var(--font-mono); }
+.muted { color: var(--muted); }
+/* Board text that may be right-to-left: set with dir="auto". */
+.bidi { unicode-bidi: isolate; }
+.sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+.icon { flex-shrink: 0; }
+.sprite { position: absolute; width: 0; height: 0; overflow: hidden; }
+
+/* ------------------------------------------------------------------------------------------------
+ * Header (every view)
+ * ---------------------------------------------------------------------------------------------- */
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  height: 56px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 0 24px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.logo { flex-shrink: 0; }
+.logo-accent { fill: var(--accent); }
+.logo-ink { fill: var(--text); }
+.logo-soft { fill: var(--logo-soft); }
+.brand-name { font-weight: 700; font-size: 16px; }
+.brand-sep { color: var(--muted); font-size: 15px; }
+.project { font-weight: 600; font-size: 15px; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.tabs { display: flex; gap: 4px; margin-left: 16px; }
+.tab {
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  text-decoration: none;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+.tab:hover { color: var(--text); background: var(--bg); }
+.tab[aria-current="page"] { font-weight: 600; background: var(--accent-soft); color: var(--accent-text); }
+
+.spacer { flex-grow: 1; }
+
+.search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 1 320px;
+  min-width: 180px;
+  height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-sunken);
+  color: var(--muted);
+}
+.search:focus-within { border-color: var(--accent); }
+.search input {
+  flex-grow: 1;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  font-size: 14px;
+  color: var(--text);
+}
+.search input::placeholder { color: var(--muted); opacity: 1; }
+
+.live { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-2); white-space: nowrap; }
+.live-dot { width: 8px; height: 8px; border-radius: 4px; flex-shrink: 0; background: var(--offline); }
+.live[data-state="live"] .live-dot { background: var(--live); }
+
+/* ------------------------------------------------------------------------------------------------
+ * Malformed-lines banner
+ * ---------------------------------------------------------------------------------------------- */
+
+.banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 24px;
+  background: var(--warn-tint);
+  border-bottom: 1px solid var(--warn-line);
+  color: var(--warn-text);
+  font-size: 14px;
+}
+.banner-text { font-weight: 600; }
+.banner-hint { color: var(--text-2); }
+.banner-hint code { font-family: var(--font-mono); font-size: 12.5px; color: var(--text); }
+.banner-dismiss {
+  margin-left: auto;
+  flex-shrink: 0;
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--warn-line);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+}
+.banner-dismiss:hover { border-color: var(--warn-text); }
+
+/* ------------------------------------------------------------------------------------------------
+ * Main area and the placeholder views (replaced by views/*.js)
+ * ---------------------------------------------------------------------------------------------- */
+
+.main { flex-grow: 1; min-height: 0; display: flex; flex-direction: column; }
+
+.page { padding: 24px; display: flex; flex-direction: column; gap: 14px; }
+.page-title { margin: 0; font-size: 20px; font-weight: 700; }
+.page-note { margin: 0; font-size: 14px; color: var(--muted); }
+.page-title .mono { font-weight: 500; color: var(--muted); }
+
+.columns { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 14px; }
+.column { display: flex; flex-direction: column; gap: 10px; min-width: 0; padding: 12px 10px; border-radius: 12px; background: var(--track); }
+.column-head { display: flex; align-items: center; gap: 8px; padding: 0 4px; }
+.column-name { margin: 0; font-size: 13px; font-weight: 700; letter-spacing: 0.04em; }
+.column-count { margin-left: auto; font-size: 13px; font-weight: 600; color: var(--text-2); }
+
+.dot { width: 10px; height: 10px; border-radius: 5px; flex-shrink: 0; }
+.dot-backlog { background: var(--col-backlog); }
+.dot-ready { background: var(--col-ready); }
+.dot-in_progress { background: var(--col-in-progress); }
+.dot-blocked { background: var(--col-blocked); }
+.dot-done { background: var(--col-done); }

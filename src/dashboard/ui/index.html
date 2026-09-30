@@ -2,9 +2,44 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
 <title>agentboard</title>
+<link rel="icon" href="/ui/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/ui/app.css">
+<script type="module" src="/ui/app.js"></script>
 </head>
 <body>
-<main id="app"></main>
+<svg class="sprite" aria-hidden="true">
+<symbol id="icon-search" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"></circle><path d="M20 20l-3.5-3.5"></path></g></symbol>
+<symbol id="icon-copy" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h10"></path></g></symbol>
+<symbol id="icon-check-circle" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M8 12.5l2.8 2.8L16.5 9.5"></path></g></symbol>
+<symbol id="icon-check" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"></path></g></symbol>
+<symbol id="icon-chevron-down" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"></path></g></symbol>
+</svg>
+<header class="topbar">
+<div class="brand">
+<svg class="logo" width="22" height="22" viewBox="0 0 22 22" aria-hidden="true"><rect class="logo-accent" x="1" y="1" width="9" height="9" rx="2"></rect><rect class="logo-ink" x="12" y="1" width="9" height="9" rx="2"></rect><rect class="logo-ink" x="1" y="12" width="9" height="9" rx="2"></rect><rect class="logo-soft" x="12" y="12" width="9" height="9" rx="2"></rect></svg>
+<span class="brand-name">agentboard</span>
+<span class="brand-sep" aria-hidden="true">/</span>
+<span class="project" data-testid="project-name"></span>
+</div>
+<nav class="tabs" aria-label="Sections">
+<a class="tab" href="#/" data-tab="overview">Overview</a>
+<a class="tab" href="#/board" data-tab="board">Board</a>
+<a class="tab" href="#/activity" data-tab="activity">Activity</a>
+</nav>
+<div class="spacer"></div>
+<label class="search">
+<svg class="icon" width="16" height="16" aria-hidden="true"><use href="#icon-search"></use></svg>
+<input type="search" aria-label="Search" placeholder="Search tasks, #id or epic" autocomplete="off" spellcheck="false" data-testid="search">
+</label>
+<div class="live" data-testid="live" data-state="connecting" role="status">
+<span class="live-dot"></span>
+<span class="live-text">connecting</span>
+</div>
+</header>
+<div id="banner"></div>
+<main id="app" class="main"></main>
 </body>
 </html>
