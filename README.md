@@ -15,9 +15,9 @@ Requires Node.js 22 or newer and git.
 
 The hooks check every commit and, before a push, everything the push would publish.
 
-The dashboard's browser tests use Playwright (a dev dependency):
+The dashboard's browser tests use Playwright, kept in its own development package in `test/ui/`:
 
-    npm install && npx playwright install chromium   # once
+    npm run setup:ui   # once
     npm run test:ui
 
 The leak guard reads private terms from `~/.agentboard-dev/denylist.txt` (one term per line, `#` for comments; in CI, the `AGENTBOARD_DENYLIST` secret). The list is never committed, and matches are reported by entry number only.

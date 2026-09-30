@@ -145,3 +145,13 @@ test('the skill names only real tools, tool fields and config options', () => {
   assert.match(text, /config problems/i);
   assert.match(text, /"open the board"[^\n]*"show me the board"[^\n]*`open_board`[^\n]*URL/);
 });
+
+test('installing the plugin runs no package install', () => {
+  // Claude Code installs packages in a plugin's folder when it holds a package.json and a lockfile
+  for (const lock of ['package-lock.json', 'npm-shrinkwrap.json', 'bun.lock', 'bun.lockb']) assert.equal(fs.existsSync(lock), false, lock);
+  const pkg = json('package.json');
+  for (const key of ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies']) assert.equal(pkg[key], undefined, key);
+  // the browser tests bring their own package, outside the npm package and the plugin's start-up
+  assert.deepEqual(Object.keys(json('test/ui/package.json').devDependencies), ['playwright']);
+  assert.equal(json('test/ui/package.json').type, 'module');
+});

@@ -1,0 +1,9 @@
+{
+  "name": "agentboard-ui-tests",
+  "private": true,
+  "type": "module",
+  "description": "Development only: Playwright for the dashboard's browser tests and screenshots.",
+  "devDependencies": {
+    "playwright": "^1.63.0"
+  }
+}

@@ -7,6 +7,8 @@ import { startDashboard } from '../../src/dashboard/server.js';
 import { buildRecipesBoard } from '../fixtures/recipes-app.js';
 import { tempRepo } from '../helpers.js';
 
+export { chromium };
+
 /**
  * The browser harness of the UI tests (npm run test:ui).
  *

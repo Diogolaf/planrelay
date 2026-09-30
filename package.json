@@ -10,13 +10,11 @@
   "files": ["src/", ".claude-plugin/", "hooks/", "skills/"],
   "scripts": {
     "test": "node --test \"test/**/*.test.js\"",
-    "test:ui": "node --test \"test/ui/**/*.ui.js\"",
+    "test:ui": "node --test \"test/ui/*.ui.js\"",
     "check:leaks": "node scripts/check-denylist.mjs --all",
     "check:pack": "node scripts/check-pack.mjs",
     "check:history": "node scripts/check-denylist.mjs --history",
-    "screenshots": "node scripts/screenshots.mjs"
-  },
-  "devDependencies": {
-    "playwright": "^1.63.0"
+    "screenshots": "node scripts/screenshots.mjs",
+    "setup:ui": "npm --prefix test/ui ci && npm --prefix test/ui exec -- playwright install chromium"
   }
 }

@@ -8,13 +8,13 @@
 //   docs/design/overview-dark.png   the Overview with the system in dark mode
 // The board and the dashboard share one fixed clock, so the relative times ("2 min ago") are the
 // same on every run. Everything is closed and the repository removed afterwards.
-// Needs Playwright's Chromium once: npx playwright install chromium
+// Needs Playwright's Chromium once: npm run setup:ui
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { chromium } from 'playwright';
+import { chromium } from '../test/ui/harness.js';
 import { startDashboard } from '../src/dashboard/server.js';
 import { buildRecipesBoard } from '../test/fixtures/recipes-app.js';
 
