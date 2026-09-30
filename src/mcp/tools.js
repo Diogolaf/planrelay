@@ -50,6 +50,8 @@ const NOT_REGISTERED = 'Your session is not registered on the board yet; try aga
 /** get_task shows this many of the latest messages, and of the files touched. */
 const MESSAGES_SHOWN = 20;
 const FILES_SHOWN = 20;
+/** A message get_task shows in full is still cut at this many characters. */
+const FULL_MAX = 2000;
 
 const ID = { type: 'integer', minimum: 1 };
 const IDS = { type: 'array', items: ID };
@@ -84,26 +86,46 @@ function taskLine(i) {
 }
 
 /**
+ * A message's whole text, from the task's message file, cut only past FULL_MAX characters (never
+ * inside a surrogate pair). Its lines after the first are indented under their entry.
+ */
+function fullText(text) {
+  let s = String(text ?? '').trim();
+  if (s.length > FULL_MAX) {
+    let end = FULL_MAX - 1;
+    if (/[\ud800-\udbff]/.test(s[end - 1])) end -= 1;
+    s = `${s.slice(0, end).trimEnd()}…`;
+  }
+  return s.replace(/\n/g, '\n  ');
+}
+
+/**
  * One conversation entry: its id (answers name it in replyTo), the author's stored name, the kind
- * and the time, then a snippet of the text. The human's words passed on by an agent read
+ * and the time, then the text in full or as a snippet. The human's words passed on by an agent read
  * "the human (relayed by <agent>)" (§4), never as an instruction.
  */
-function messageLine(m, who) {
+function messageLine(m, who, full) {
   const author = m.relayedFromHuman === true ? `the human (relayed by ${m.authorName})` : m.authorName;
   let kind = m.kind;
   if (m.kind === 'question') kind = `question to ${who(m.to)}`;
   else if (m.kind === 'answer' && m.replyTo) kind = `answer to ${m.replyTo}`;
   const tags = [author, ...(m.kind === 'system' ? [] : [kind]), when(m.at)].filter(Boolean);
-  return `- ${m.id} ${tags.join(' · ')}: ${snippet(m.text)}`;
+  return `- ${m.id} ${tags.join(' · ')}: ${full ? fullText(m.text) : snippet(m.text)}`;
 }
 
 /**
- * get_task's view (§8) as lines of board data, from getTask: its stored names, the definition of
- * done in full, and at most the last MESSAGES_SHOWN messages, as snippets. The latest handoff or
- * summary is shown even when older than those.
+ * get_task's view (§8) as lines of board data, from getTask with the task's message file: its
+ * stored names, the definition of done in full, and at most the last MESSAGES_SHOWN messages. The
+ * texts the next agent must not lose are shown in full (fullText): the latest handoff or summary,
+ * even when older than those messages, and every question, answer and relayed word of the human
+ * among them. Comments, system notes and older notes are snippets, like the pings
+ * (hooks/format.js FULL_IN_GET_TASK follows this rule).
  * @param {NonNullable<ReturnType<typeof getTask>>} t @param {Registry} reg @param {string | null} me the reader
  */
 function describe(t, reg, me) {
+  const note = t.messages.findLast((m) => m.kind === 'handoff' || m.kind === 'summary');
+  const inFull = (m) => m === note || m.kind === 'question' || m.kind === 'answer' || m.relayedFromHuman === true;
+  const textOf = (id, fallback) => t.messages.find((m) => m.id === id)?.text ?? fallback;
   const who = (to) => recipient(reg, to, me);
   const lines = [];
   if (t.kind === 'epic') {
@@ -132,7 +154,7 @@ function describe(t, reg, me) {
       const done = t.checklist.filter((i) => i.done).length;
       lines.push(`Checklist (${done}/${t.checklist.length} done):`, ...t.checklist.map((i) => `- [${i.done ? 'x' : ' '}] ${i.text}`));
     }
-    for (const q of t.openQuestions) lines.push(`Open question ${q.id} from ${q.authorName} to ${who(q.to)}: ${snippet(q.text)}`);
+    for (const q of t.openQuestions) lines.push(`Open question ${q.id} from ${q.authorName} to ${who(q.to)}: ${snippet(textOf(q.id, q.text))}`);
     if (t.dependsOn.length) lines.push(`Depends on: ${ids(t.dependsOn)}`);
     if (t.blocks.length) lines.push(`Blocks: ${ids(t.blocks)}`);
     if (t.files.length) {
@@ -140,14 +162,18 @@ function describe(t, reg, me) {
       lines.push(`Files touched (${t.files.length}): ${t.files.slice(0, FILES_SHOWN).map((f) => f.path).join(', ')}${more}`);
     }
     if (t.links.length) lines.push(`Links: ${t.links.map((l) => `${l.title} → ${l.target}`).join('; ')}`);
-    if (t.done) lines.push(`Completed by ${t.completedByName}: ${t.summary ?? ''}`);
+    if (t.done) {
+      // the summary is the latest note, shown in full below; the task's copy only when the message file lacks it
+      lines.push(note?.kind === 'summary'
+        ? `Completed by ${t.completedByName} (summary ${note.id}).`
+        : `Completed by ${t.completedByName}: ${fullText(t.summary ?? '')}`);
+    }
   }
   const recent = t.messages.slice(-MESSAGES_SHOWN);
-  const note = t.messages.findLast((m) => m.kind === 'handoff' || m.kind === 'summary');
-  if (note && !recent.includes(note)) lines.push(`Latest ${note.kind} (${note.id}, ${note.authorName}): ${snippet(note.text)}`);
+  if (note && !recent.includes(note)) lines.push(`Latest ${note.kind} (${note.id}, ${note.authorName}): ${fullText(note.text)}`);
   if (recent.length) {
     const shown = t.messages.length > recent.length ? `, last ${recent.length} shown` : '';
-    lines.push(`Conversation (${plural(t.messages.length, 'message')}${shown}):`, ...recent.map((m) => messageLine(m, who)));
+    lines.push(`Conversation (${plural(t.messages.length, 'message')}${shown}):`, ...recent.map((m) => messageLine(m, who, inFull(m))));
   }
   return lines;
 }

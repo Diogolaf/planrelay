@@ -3,7 +3,7 @@ import { nameOf } from '../core/agents.js';
 import { COLUMN_LABELS, readyQueue } from '../core/derive.js';
 import { claimedBy } from '../core/ops.js';
 import { boardCounts, getTask } from '../core/queries.js';
-import { snippet } from '../core/reduce.js';
+import { snippet, wasCut } from '../core/reduce.js';
 
 /**
  * What agents read (§9): the session-start brief and the per-prompt pings. Board text reaches an
@@ -17,7 +17,14 @@ const OPEN = `<${NAME}-data>`;
 const CLOSE = `</${NAME}-data>`;
 export const MAX_BRIEF_LINES = 15;
 
-const DROPPED = 'Some older updates fell out of the ping window; get_task has the full history of a task.';
+const DROPPED = "Some older updates fell out of the ping window; get_task shows a task's latest messages.";
+/**
+ * Message kinds whose text get_task shows in full (mcp/tools.js describe): questions and answers
+ * among the latest messages, and the task's latest handoff or summary; the human's relayed words too.
+ * Comments and system notes are shown there as snippets, as in the pings.
+ */
+const FULL_IN_GET_TASK = new Set(['question', 'answer', 'handoff', 'summary']);
+const fullTextHint = (taskId) => ` (get_task #${taskId} has the full text)`;
 
 /** Fences board-originated text as data (§9). Any spelling of the closing tag is defused. */
 export function wrapBoardData(lines) {
@@ -33,10 +40,20 @@ export function wrapBoardData(lines) {
 
 /**
  * One ping as a line. An answer or comment the human gave through an agent reads "relayed by
- * <agent>" (§4), never as an instruction from the human.
+ * <agent>" (§4), never as an instruction from the human. Pings carry snippets (the message ring's
+ * texts): when one was cut and get_task shows that message in full, the line says so.
  * @param {Ping} item
  */
 export function formatPing(item) {
+  const m = item.message;
+  const line = pingLine(item);
+  const cut = wasCut(m.text) || (item.reason === 'answer' && wasCut(item.question));
+  const inFull = FULL_IN_GET_TASK.has(m.kind) || m.relayedFromHuman === true;
+  return cut && inFull ? `${line}${fullTextHint(m.taskId)}` : line;
+}
+
+/** @param {Ping} item */
+function pingLine(item) {
   const m = item.message;
   if (m.kind === 'system') return `#${m.taskId} · ${m.text}`;
   const quote = `"${m.text}"`;
@@ -109,7 +126,8 @@ export function formatBrief({ agentName, projectName, state, reg, agentId, pings
       lines.push(`Checklist: ${done}/${mine.checklist.length} done${next ? `; next: ${snippet(next.text)}` : ''}`);
     }
     if (mine.lastHandoff) {
-      lines.push(`Last ${mine.lastHandoff.kind} from ${nameOf(reg, mine.lastHandoff.author)}: ${snippet(mine.lastHandoff.text)}`);
+      const more = wasCut(mine.lastHandoff.text) ? fullTextHint(mine.id) : '';
+      lines.push(`Last ${mine.lastHandoff.kind} from ${nameOf(reg, mine.lastHandoff.author)}: ${snippet(mine.lastHandoff.text)}${more}`);
     }
     for (const q of mine.openQuestions.slice(0, 2)) {
       const from = q.author === agentId ? '' : ` from ${q.authorName}`;

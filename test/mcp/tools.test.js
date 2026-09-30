@@ -133,7 +133,7 @@ test('post_message replies with the new message id; the human\'s words read "rel
   assert.match(a.call('whats_new'), new RegExp(`#1 · the human answered your question ${qid} "Include oven time\\?" \\(relayed by Jade\\): "Yes, include it\\."`));
 });
 
-test('get_task shows stored names and at most the last 20 messages, as snippets, keeping the latest handoff', () => {
+test('get_task: stored names, the last 20 messages; the latest handoff, questions and answers in full, comments as snippets', () => {
   const repo = tempRepo();
   fs.mkdirSync(path.join(repo, '.agentboard'));
   fs.writeFileSync(path.join(repo, '.agentboard', 'config.json'), '{ "claimTimeoutHours": 8760 }');
@@ -142,9 +142,12 @@ test('get_task shows stored names and at most the last 20 messages, as snippets,
   const b = toolsFor(repo, 's2', { clock });
   a.call('create_task', { title: 'Filter by prep time', requestedByHuman: true, description: `Line one\nline two ${'x'.repeat(400)}` });
   a.call('claim_task', { id: 1 });
-  a.call('release_task', { id: 1, note: 'Stopped at the API; the UI is next.' });
+  a.call('release_task', { id: 1, note: `Stopped at the API.\nNext step: ${'z'.repeat(500)} then the UI.` });
   b.call('claim_task', { id: 1 });
-  for (let i = 1; i <= 20; i++) b.call('post_message', { taskId: 1, text: i === 20 ? `Long ${'y'.repeat(400)}` : `Note ${i}` });
+  for (let i = 1; i <= 17; i++) b.call('post_message', { taskId: 1, text: `Note ${i}` });
+  const qid = /(m\d+)/.exec(b.call('post_message', { taskId: 1, kind: 'question', to: 'human', text: `Minutes or hours? ${'q'.repeat(400)}` }))[1];
+  b.call('post_message', { taskId: 1, text: `Long ${'y'.repeat(400)}` });
+  b.call('post_message', { taskId: 1, kind: 'answer', replyTo: qid, relayedFromHuman: true, text: `Minutes. ${'w'.repeat(2500)}` });
   // a week later the registry has forgotten Amber; history keeps the names stored with it
   hook(repo, 'SessionEnd', 's1', T0 + MIN);
   clock.t = T0 + 8 * 24 * HOUR;
@@ -153,11 +156,31 @@ test('get_task shows stored names and at most the last 20 messages, as snippets,
   const text = b.call('get_task', { id: 1 });
   assert.match(text, /\nOrigin: requested by the human via Amber · Assignee: Jade\n/);
   assert.match(text, /\nDefinition of done: Line one\nline two x{400}\n/); // the definition of done in full
-  assert.match(text, /\nLatest handoff \(m\d+, Amber\): Stopped at the API; the UI is next\.\n/);
-  assert.match(text, /\nConversation \(21 messages, last 20 shown\):\n/);
-  assert.doesNotMatch(text, /Stopped at the API; the UI is next\.\n- /); // the handoff itself is not among the last 20
-  assert.match(text, /- m\d+ Jade · comment · 2026-01-01 12:00 UTC: Long y{270,280}…\n<\/agentboard-data>$/);
+  // older than the last 20 messages, and still in full, its lines indented under it
+  assert.match(text, /\nLatest handoff \(m\d+, Amber\): Stopped at the API\.\n {2}Next step: z{500} then the UI\.\nConversation \(21 messages, last 20 shown\):\n/);
+  assert.match(text, new RegExp(`\\n- ${qid} Jade · question to the human · 2026-01-01 12:00 UTC: Minutes or hours\\? q{400}\\n`));
+  assert.match(text, /\n- m\d+ Jade · comment · 2026-01-01 12:00 UTC: Long y{270,280}…\n/);
+  // at most 2,000 characters even in full
+  const answer = new RegExp(`\\n- m\\d+ the human \\(relayed by Jade\\) · answer to ${qid} · 2026-01-01 12:00 UTC: (Minutes\\. w+…)\\n</agentboard-data>$`).exec(text);
+  assert.equal(answer[1].length, 2000);
   assert.equal(text.split('\n').filter((l) => l.startsWith('- m')).length, 20);
+});
+
+test('claim_task shows the handoff it continues from in full', () => {
+  const repo = tempRepo();
+  const a = toolsFor(repo, 's1');
+  const b = toolsFor(repo, 's2');
+  a.call('create_task', { title: 'Shopping list export', description: 'Export the list as plain text and as a share link.', requestedByHuman: true });
+  a.call('claim_task', { id: 1 });
+  const note = 'Stopped halfway. Done: src/export/text.js builds the plain-text body (grouped by aisle, quantities normalized via units.js), '
+    + 'with 9 passing tests in test/export/text.test.js. Not done: (1) the share link: the plan is a signed URL from api/share.js, but the '
+    + 'signing key lookup fails locally; see the TODO in api/share.js line 40. (2) The Export button in ListScreen.tsx is stubbed and disabled. '
+    + 'Next step: fix the key lookup by reading SHARE_KEY_ID from config, then wire the button. Do NOT change units.js, Jade is editing it.';
+  assert.ok(note.length > 500);
+  a.call('release_task', { id: 1, note });
+  const reply = b.call('claim_task', { id: 1 });
+  assert.ok(reply.includes(`: ${note}\n</agentboard-data>`), reply);
+  assert.ok(b.call('get_task', { id: 1 }).includes(note));
 });
 
 test('/clear in the same host process: the server acts as the new session and never revives the ended one', () => {
@@ -217,7 +240,7 @@ test('whats_new: from the cursor before the last prompt, filtered by since witho
   // more updates than the ring holds: say so
   const board = openBoard(repo);
   transact(board, () => ({ events: Array.from({ length: 301 }, (_, i) => systemMessage(1, `Note ${i}`)) }), { now: T0 + 4 * MIN });
-  assert.match(a.call('whats_new'), /<agentboard-data>\nSome older updates fell out of the ping window; get_task has the full history of a task\.\n<\/agentboard-data>$/);
+  assert.match(a.call('whats_new'), /<agentboard-data>\nSome older updates fell out of the ping window; get_task shows a task's latest messages\.\n<\/agentboard-data>$/);
 });
 
 test('every write runs housekeeping first and reads the config again', () => {

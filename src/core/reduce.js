@@ -113,6 +113,11 @@ export function snippet(text) {
   return `${t.slice(0, end)}…`;
 }
 
+/** True when `text` is a snippet() that was cut short: it then ends with "…" at the snippet's length. */
+export function wasCut(text) {
+  return typeof text === 'string' && text.length >= SNIPPET - 1 && text.endsWith('…');
+}
+
 /** @param {Partial<Task>} fields @returns {Task} */
 export function newTask(fields) {
   /** @type {any} */

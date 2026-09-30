@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { wrapBoardData, formatPing, formatPings, formatBrief, MAX_BRIEF_LINES } from '../../src/hooks/format.js';
+import { snippet } from '../../src/core/reduce.js';
 import { ctxWith } from '../core/ops-helpers.js';
 
 const msg = (over) => ({ id: 'm7', taskId: 14, author: 'a2', kind: 'comment', text: 'hello', mentions: [], relayedFromHuman: false, ...over });
@@ -136,4 +137,27 @@ test('suggestions are counted in the plural, and the dropped flag shows with no 
   const out = formatBrief({ agentName: 'Jade', projectName: 'p', state: ctx.state, reg: ctx.reg, agentId: 'a2', pings: found([], true), maxPings: 8, rulesFile: null });
   assert.match(out, /2 suggestions await approval/);
   assert.match(out, /older updates .*get_task/);
+});
+
+test('a ping whose text was cut says where the full text is, when get_task shows it in full', () => {
+  const long = snippet(`Use the metric units only. ${'z'.repeat(400)}`); // the ring stores snippets
+  const hint = ' (get_task #14 has the full text)';
+  const answer = formatPing({ reason: 'answer', message: msg({ kind: 'answer', replyTo: 'm4', text: long }), authorName: 'Jade', question: 'Units?' });
+  assert.ok(answer.endsWith(`…"${hint}`), answer);
+  const longQuestion = formatPing({ reason: 'answer', message: msg({ kind: 'answer', replyTo: 'm4', text: 'Yes' }), authorName: 'Jade', question: long });
+  assert.ok(longQuestion.endsWith(hint), longQuestion);
+  assert.ok(formatPing({ reason: 'question', message: msg({ kind: 'question', text: long }), authorName: 'Jade' }).endsWith(hint));
+  assert.ok(formatPing({ reason: 'update', message: msg({ text: long, relayedFromHuman: true }), authorName: 'Jade' }).endsWith(hint));
+  assert.ok(formatPing({ reason: 'update', message: msg({ kind: 'handoff', text: long }), authorName: 'Jade' }).endsWith(hint));
+  // get_task shows comments as snippets too, so there is nowhere to point; short texts were never cut
+  assert.ok(!formatPing({ reason: 'update', message: msg({ text: long }), authorName: 'Jade' }).includes('full text'));
+  assert.ok(!formatPing({ reason: 'mention', message: msg({ text: long }), authorName: 'Jade' }).includes('full text'));
+  assert.ok(!formatPing({ reason: 'answer', message: msg({ kind: 'answer', replyTo: 'm4', text: 'Yes' }), authorName: 'Jade', question: 'Units?' }).includes('full text'));
+});
+
+test('the brief points to get_task when the last handoff was cut', () => {
+  const text = snippet(`Stopped halfway. ${'z'.repeat(400)}`);
+  const ctx = ctxWith({ tasks: [{ id: 14, title: 'X', assignee: 'a1', lastHandoff: { author: 'a2', at: 0, kind: 'handoff', text } }] });
+  const out = formatBrief({ agentName: 'Amber', projectName: 'p', state: ctx.state, reg: ctx.reg, agentId: 'a1', pings: found([]), maxPings: 8, rulesFile: null });
+  assert.match(out, /\nLast handoff from Jade: Stopped halfway\. z+… \(get_task #14 has the full text\)\n/);
 });
