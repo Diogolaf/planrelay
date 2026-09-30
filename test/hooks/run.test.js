@@ -17,7 +17,7 @@ const envOf = (session) => ({ CLAUDE_PID: String(PIDS[session] ?? process.pid) }
 const hook = (repo, event, session, extra = {}, now = T0, env = envOf(session)) =>
   runHook({ hook_event_name: event, session_id: session, cwd: repo, ...extra }, { env, now });
 const context = (out) => (out ? JSON.parse(out).hookSpecificOutput.additionalContext : '');
-const errorsLog = (repo) => path.join(repo, '.git', 'agentboard', 'errors.log');
+const errorsLog = (repo) => path.join(repo, '.git', 'planrelay', 'errors.log');
 
 function asAgent(repo, agentId, op, input, now = T0) {
   const board = openBoard(repo);
@@ -44,9 +44,9 @@ test('SessionStart registers the agent and briefs it', () => {
 
 test('the brief points to the project rules and reports config problems', () => {
   const repo = tempRepo();
-  fs.mkdirSync(path.join(repo, '.agentboard'));
-  fs.writeFileSync(path.join(repo, '.agentboard', 'rules.md'), 'Run the tests before completing a task.\n');
-  fs.writeFileSync(path.join(repo, '.agentboard', 'config.json'), '{ "maxPings": "many" }');
+  fs.mkdirSync(path.join(repo, '.planrelay'));
+  fs.writeFileSync(path.join(repo, '.planrelay', 'rules.md'), 'Run the tests before completing a task.\n');
+  fs.writeFileSync(path.join(repo, '.planrelay', 'config.json'), '{ "maxPings": "many" }');
   const text = context(hook(repo, 'SessionStart', 's1'));
   assert.match(text, /this project has rules in .*rules\.md/);
   assert.match(text, /Config problems .*maxPings must be a number/);
@@ -212,7 +212,7 @@ test('PreToolUse denies an edit to a file another active agent is working on', (
   assert.equal(decision.permissionDecision, 'deny');
   assert.match(decision.permissionDecisionReason, /^src\/auth\.js is being edited by Jade on #1\. /);
   // the title is board text, so it is fenced as data (§9)
-  assert.match(decision.permissionDecisionReason, /<agentboard-data>\n#1 Sign in with Google\n<\/agentboard-data>$/);
+  assert.match(decision.permissionDecisionReason, /<planrelay-data>\n#1 Sign in with Google\n<\/planrelay-data>$/);
   assert.equal(hook(repo, 'PreToolUse', 's1', { tool_name: 'Read', tool_input: { file_path: file } }, T0 + 2 * MIN), '');
   assert.equal(hook(repo, 'PreToolUse', 's1', { tool_name: 'Edit', tool_input: { file_path: path.join(repo, 'README.md') } }, T0 + 2 * MIN), '');
   assert.equal(hook(repo, 'PreToolUse', 's2', { tool_name: 'Edit', tool_input: { file_path: file } }, T0 + 2 * MIN), '');
@@ -269,8 +269,8 @@ test('two worktrees of one repository: one board, each worktree inherits its own
   execFileSync('git', ['worktree', 'add', '-q', '-b', 'photos', wt], { cwd: repo, env: gitEnv(), stdio: 'ignore' });
   hook(repo, 'SessionStart', 's1');
   hook(wt, 'SessionStart', 's2');
-  assert.equal(openBoard(wt).dir, path.join(repo, '.git', 'agentboard'));
-  assert.equal(openBoard(repo).dir, path.join(repo, '.git', 'agentboard'));
+  assert.equal(openBoard(wt).dir, path.join(repo, '.git', 'planrelay'));
+  assert.equal(openBoard(repo).dir, path.join(repo, '.git', 'planrelay'));
   asAgent(repo, 's1', createTask, { title: 'Filter by prep time', requestedByHuman: true });
   asAgent(repo, 's1', createTask, { title: 'Cache photos', requestedByHuman: true });
   asAgent(repo, 's1', claimTask, { id: 1 });
@@ -351,7 +351,7 @@ test('input in shapes this version does not know is ignored, never an error', ()
 test('fail-open: internal errors are logged, print nothing and never throw', () => {
   const repo = tempRepo();
   hook(repo, 'SessionStart', 's1');
-  const registry = path.join(repo, '.git', 'agentboard', 'agents.json');
+  const registry = path.join(repo, '.git', 'planrelay', 'agents.json');
   fs.rmSync(registry);
   fs.mkdirSync(registry); // the registry cannot be read
   const edit = { tool_name: 'Edit', tool_input: { file_path: path.join(repo, 'a.js') } };
@@ -365,6 +365,6 @@ test('fail-open: internal errors are logged, print nothing and never throw', () 
     assert.match(log, new RegExp(`hook ${event}: `));
   }
   const broken = tempRepo();
-  fs.writeFileSync(path.join(broken, '.git', 'agentboard'), 'not a folder');
+  fs.writeFileSync(path.join(broken, '.git', 'planrelay'), 'not a folder');
   assert.equal(hook(broken, 'SessionStart', 's1'), '');
 });

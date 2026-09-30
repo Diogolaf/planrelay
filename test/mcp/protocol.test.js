@@ -6,7 +6,7 @@ import { BoardError } from '../../src/core/ops.js';
 
 const errors = [];
 const handle = createHandler({
-  name: 'agentboard',
+  name: 'planrelay',
   version: '0.1.0',
   instructions: 'Be nice.',
   onError: (err, context) => errors.push([context, err.message]),
@@ -22,7 +22,7 @@ test('initialize negotiates the protocol version', () => {
   const r = handle(req(1, 'initialize', { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 't', version: '1' } }));
   assert.equal(r.result.protocolVersion, '2025-03-26');
   assert.deepEqual(r.result.capabilities, { tools: {} });
-  assert.deepEqual(r.result.serverInfo, { name: 'agentboard', version: '0.1.0' });
+  assert.deepEqual(r.result.serverInfo, { name: 'planrelay', version: '0.1.0' });
   assert.equal(r.result.instructions, 'Be nice.');
   // a newer client (or none given) is offered the newest version this server speaks
   assert.equal(handle(req(2, 'initialize', { protocolVersion: '2099-01-01' })).result.protocolVersion, SUPPORTED_VERSIONS[0]);
@@ -46,7 +46,7 @@ test('tools/call returns text, BoardErrors as tool errors, and hides internals',
   errors.length = 0;
   const crash = handle(req(7, 'tools/call', { name: 'crash' })).result;
   assert.equal(crash.isError, true);
-  assert.equal(crash.content[0].text, 'Internal error in agentboard. Try again; if it keeps failing, tell the human.');
+  assert.equal(crash.content[0].text, 'Internal error in planrelay. Try again; if it keeps failing, tell the human.');
   assert.deepEqual(errors, [['tool crash', 'EBUSY: C:\\secret\\path']]);
   assert.equal(handle(req(8, 'tools/call', { name: 'nope' })).error.code, -32602);
   assert.equal(handle(req(9, 'tools/call')).error.code, -32602);

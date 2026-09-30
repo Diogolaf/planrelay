@@ -85,7 +85,7 @@ async function turn(prompt) {
 log({ args, cwd: process.cwd(), claudeEnv: Object.keys(process.env).filter((k) => k.toUpperCase().startsWith('CLAUDE')).sort() });
 print({
   type: 'system', subtype: 'init', cwd: process.cwd(), session_id: sessionId, model: flag('--model'), permissionMode: flag('--permission-mode'),
-  tools: ['Read', 'Edit', 'Write', 'Glob', 'Grep', 'TodoWrite', ...BOARD_TOOLS.map((name) => `mcp__agentboard__${name}`)],
+  tools: ['Read', 'Edit', 'Write', 'Glob', 'Grep', 'TodoWrite', ...BOARD_TOOLS.map((name) => `mcp__planrelay__${name}`)],
   mcp_servers: mcpServers(),
 });
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Leak guard: blocks private terms from entering the repository.
-// Terms come from AGENTBOARD_DENYLIST (CI secret) or a private file outside the repo
-// (AGENTBOARD_DENYLIST_FILE, default ~/.agentboard-dev/denylist.txt).
+// Terms come from PLANRELAY_DENYLIST (CI secret) or a private file outside the repo
+// (PLANRELAY_DENYLIST_FILE, default ~/.planrelay-dev/denylist.txt).
 // Matches are reported by entry number, and every printed line goes through maskTerms,
 // so a private term never reaches a terminal or a CI log. File content is never printed.
 //
@@ -71,14 +71,14 @@ function say(line) {
 }
 
 function loadTerms(env = process.env) {
-  if (env.AGENTBOARD_DENYLIST) return parseList(env.AGENTBOARD_DENYLIST);
-  const file = env.AGENTBOARD_DENYLIST_FILE || path.join(os.homedir(), '.agentboard-dev', 'denylist.txt');
+  if (env.PLANRELAY_DENYLIST) return parseList(env.PLANRELAY_DENYLIST);
+  const file = env.PLANRELAY_DENYLIST_FILE || path.join(os.homedir(), '.planrelay-dev', 'denylist.txt');
   let bytes;
   try {
     bytes = fs.readFileSync(file);
   } catch (err) {
     if (err.code === 'ENOENT') {
-      throw new GuardError('no denylist found. Create ~/.agentboard-dev/denylist.txt (one term per line) or set AGENTBOARD_DENYLIST.');
+      throw new GuardError('no denylist found. Create ~/.planrelay-dev/denylist.txt (one term per line) or set PLANRELAY_DENYLIST.');
     }
     throw new GuardError(`could not read the denylist (${err.code || err.name}).`);
   }

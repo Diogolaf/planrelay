@@ -172,7 +172,7 @@ function isBare(commonDir) {
 }
 
 /**
- * The folder whose `.agentboard/` settings apply to the whole shared board: the main worktree.
+ * The folder whose `.planrelay/` settings apply to the whole shared board: the main worktree.
  * - In the main worktree or a submodule (its git dir is the common dir): its own top folder.
  * - In a linked worktree: the folder holding the common dir when that is a `.git` folder of a
  *   repository that is not bare; otherwise (a bare repository, including a bare one named `.git`,
@@ -188,12 +188,12 @@ function configRootOf({ top, gitDir, commonDir }) {
 }
 
 /**
- * The folder a board belongs to outside git: `start`, unless `start` has no `.agentboard/` folder
+ * The folder a board belongs to outside git: `start`, unless `start` has no `.planrelay/` folder
  * and a folder above it has one; then the nearest such folder, so a `cd` into a subfolder of a
  * marked project keeps its board. Only that deliberate marker counts. Existing boards never do:
  * every session creates one, so a board above `start` only means a session once ran there (one run
  * in Desktop must not capture Desktop/recipes). The search never considers a file-system root, the
- * home folder or its parents (the home folder holds the global `.agentboard/`), or a
+ * home folder or its parents (the home folder holds the global `.planrelay/`), or a
  * GIT_CEILING_DIRECTORIES entry, and stops there.
  * @returns {{ root: string, key: string }} root in the caller's spelling where possible; key hashes to the board folder
  */
@@ -230,12 +230,12 @@ function startFolder(abs, projectDir) {
 
 /**
  * Where the board for a folder lives (§6): in the shared git dir inside git, else under
- * `~/.agentboard/boards/<sha256 of the folder's normalized real path>/`.
+ * `~/.planrelay/boards/<sha256 of the folder's normalized real path>/`.
  *
  * One session, one board: when `cwd` lies inside `projectDir`, the search starts from `projectDir`
  * instead, inside git or not. Hooks pass the agent's current folder and the MCP server passes the
  * project folder, so a `cd` into a submodule, a nested repository or a subfolder with its own
- * `.agentboard/` must not give the two a different board. The one exception keeps the board and
+ * `.planrelay/` must not give the two a different board. The one exception keeps the board and
  * changes only the local view: when `cwd` is in a linked worktree of the same repository (for
  * example `project/.worktrees/feat`), `repoRoot` and `gitDir` are that worktree's, so the branch
  * and repo-relative paths match an agent started there. A `cwd` outside `projectDir` is resolved
@@ -248,7 +248,7 @@ function startFolder(abs, projectDir) {
  *   ownerOf: owner uid of a `.git` path (default: from its stat; for tests).
  * @returns {{ boardDir: string, repoRoot: string, configRoot: string, projectName: string, inGit: boolean, gitDir: string | null }}
  *   repoRoot: the working tree (or non-git folder) that file paths are relative to; configRoot: the
- *   folder whose `.agentboard/` settings apply to the board (the main worktree in git, else repoRoot).
+ *   folder whose `.planrelay/` settings apply to the board (the main worktree in git, else repoRoot).
  */
 export function resolveBoard(cwd, opts = {}) {
   const home = path.resolve(opts.home ?? os.homedir());

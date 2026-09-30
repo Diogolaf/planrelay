@@ -15,7 +15,7 @@
 // failed; then its path is printed. Files and transcripts are never printed, only where they
 // are; a failed check says in one line what it found instead.
 //
-// For tests: AGENTBOARD_ACCEPTANCE_CLAUDE, a JSON array such as
+// For tests: PLANRELAY_ACCEPTANCE_CLAUDE, a JSON array such as
 // ["node","test/fixtures/fake-claude.mjs"], replaces the `claude` command, so no session starts.
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -50,9 +50,9 @@ function parseArgs(argv) {
   return opts;
 }
 
-/** The command that replaces `claude` in tests (AGENTBOARD_ACCEPTANCE_CLAUDE), or undefined. */
+/** The command that replaces `claude` in tests (PLANRELAY_ACCEPTANCE_CLAUDE), or undefined. */
 function standIn() {
-  const raw = process.env.AGENTBOARD_ACCEPTANCE_CLAUDE;
+  const raw = process.env.PLANRELAY_ACCEPTANCE_CLAUDE;
   if (raw === undefined) return undefined; // set but empty is a mistake, never a reason to run the real command
   let list = null;
   try {
@@ -61,7 +61,7 @@ function standIn() {
     // reported below
   }
   if (!Array.isArray(list) || !list.length || !list.every((part) => typeof part === 'string' && part !== '')) {
-    throw new Error('AGENTBOARD_ACCEPTANCE_CLAUDE must be a JSON array of texts, such as ["node","test/fixtures/fake-claude.mjs"]');
+    throw new Error('PLANRELAY_ACCEPTANCE_CLAUDE must be a JSON array of texts, such as ["node","test/fixtures/fake-claude.mjs"]');
   }
   // sessions run in the throwaway project, so a file named from this folder gets its full path
   return list.map((part, i) => (i > 0 && fs.existsSync(part) ? path.resolve(part) : part));
@@ -232,11 +232,11 @@ process.on('exit', () => killAll());
 try {
   opts.command = standIn();
   say(opts.command
-    ? 'AGENTBOARD_ACCEPTANCE_CLAUDE replaces the claude command: no real session starts.'
+    ? 'PLANRELAY_ACCEPTANCE_CLAUDE replaces the claude command: no real session starts.'
     : `Starting real Claude Code sessions on your account: at most ${MAX_SESSIONS} in this run.`);
   for (const name of opts.scenario === 'all' ? ['solo', 'pair'] : [opts.scenario]) {
     const scenario = SCENARIOS[name];
-    const folder = { dir: fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'agentboard-acceptance-'))), keep: true };
+    const folder = { dir: fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'planrelay-acceptance-'))), keep: true };
     folders.push(folder);
     say(`${name}: ${scenario.title} (model ${opts.model}, up to ${usd(opts.budget)} a session)`);
     const project = makeProject(folder.dir);

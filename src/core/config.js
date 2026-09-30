@@ -90,7 +90,7 @@ function check(key, value) {
 }
 
 /**
- * Parses the text (or raw bytes) of `.agentboard/config.json`. Pure and never throws: every
+ * Parses the text (or raw bytes) of `.planrelay/config.json`. Pure and never throws: every
  * problem falls back per key (§7) and is described in one short line without file content.
  * @param {string | Uint8Array} input @returns {ConfigResult}
  */

@@ -1,12 +1,12 @@
 {
-  "name": "agentboard",
+  "name": "planrelay",
   "version": "0.1.0",
   "description": "A local task board for AI coding agents: create, claim, discuss and hand off tasks across sessions.",
-  "author": { "name": "agentboard contributors" },
+  "author": { "name": "planrelay contributors" },
   "license": "MIT",
   "keywords": ["tasks", "board", "handoff", "agents", "mcp"],
   "mcpServers": {
-    "agentboard": {
+    "planrelay": {
       "command": "node",
       "args": ["${CLAUDE_PLUGIN_ROOT}/src/cli.js", "mcp"]
     }

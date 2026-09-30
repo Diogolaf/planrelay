@@ -24,7 +24,7 @@ process.on('exit', cleanup);
 
 /** A fresh empty folder (real long path, no 8.3 short names on Windows), removed when the process exits. */
 export function tempDir() {
-  const dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'agentboard-test-')));
+  const dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'planrelay-test-')));
   created.push(dir);
   return dir;
 }

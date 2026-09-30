@@ -91,7 +91,7 @@ export function openBrowser(url, { spawn = childProcess.spawn, platform = proces
 
 /**
  * The dashboard of `board`, opened in the browser, for open_board. Synchronous, like MCP tool
- * handlers. A live recorded dashboard is reused; otherwise `agentboard dashboard` is started for
+ * handlers. A live recorded dashboard is reused; otherwise `planrelay dashboard` is started for
  * the board's folder, detached and without output, so it outlives this process and never writes to
  * the MCP server's stdout, and this waits up to 5 s for it to record itself. That dashboard runs in
  * the home folder, not the project's (a process's folder cannot be renamed or moved on Windows), and

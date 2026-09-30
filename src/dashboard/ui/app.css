@@ -1,5 +1,5 @@
 /*
- * agentboard dashboard styles. Colors, sizes and spacing follow docs/design/mockups/ (the light
+ * planrelay dashboard styles. Colors, sizes and spacing follow docs/design/mockups/ (the light
  * tokens are the mockups' colors); the dark theme redefines the same tokens. The CSP allows no
  * inline style, so every look lives here as a class; a dynamic value (a bar's width, an agent's
  * color) is set by view code with el.style.setProperty on a custom property.

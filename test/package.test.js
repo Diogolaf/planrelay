@@ -81,7 +81,7 @@ test('the packed package runs: help, a hook and the agent tools', async () => {
 
   const help = spawnSync(process.execPath, [cli, '--help'], { encoding: 'utf8', env, cwd: repo });
   assert.equal(help.status, 0, help.stderr);
-  assert.match(help.stdout, /usage: agentboard <hook\|mcp\|repair\|dashboard>/);
+  assert.match(help.stdout, /usage: planrelay <hook\|mcp\|repair\|dashboard>/);
 
   const r = spawnSync(process.execPath, [cli, 'hook'], {
     input: JSON.stringify({ hook_event_name: 'SessionStart', session_id: 's1', cwd: repo, source: 'startup' }), encoding: 'utf8', env, cwd: repo,
@@ -113,7 +113,7 @@ test('the packed package serves the dashboard with its fonts', async () => {
   const exited = new Promise((resolve) => child.on('exit', resolve));
   try {
     await waitFor(() => out.includes('\n') || err !== '');
-    const m = /^agentboard dashboard for .+: http:\/\/127\.0\.0\.1:(\d+)\/ \(Ctrl\+C to stop\)\n$/.exec(out);
+    const m = /^planrelay dashboard for .+: http:\/\/127\.0\.0\.1:(\d+)\/ \(Ctrl\+C to stop\)\n$/.exec(out);
     assert.ok(m, `stdout: ${out} stderr: ${err}`);
     const port = Number(m[1]);
 

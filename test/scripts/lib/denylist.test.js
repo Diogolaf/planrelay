@@ -173,7 +173,7 @@ test('splitIdent separates name and e-mail', () => {
 
 test('only no-reply or placeholder commit emails are allowed', () => {
   assert.ok(ALLOWED_EMAIL.test('12345+someone@users.noreply.github.com'));
-  assert.ok(ALLOWED_EMAIL.test('agentboard-dev@example.invalid'));
+  assert.ok(ALLOWED_EMAIL.test('planrelay-dev@example.invalid'));
   assert.ok(!ALLOWED_EMAIL.test('someone@mail.example.com'));
   assert.ok(!ALLOWED_EMAIL.test('someone@mail.example.com@example.invalid'));
   assert.ok(!ALLOWED_EMAIL.test('someone@example.invalid.example.com'));

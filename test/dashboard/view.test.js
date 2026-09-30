@@ -416,7 +416,7 @@ test('buildView is pure: no clock, inputs unchanged, results share nothing with 
 });
 
 test('performance: a 500-task board builds in well under 100 ms', (t) => {
-  const BUDGET_MS = Number(process.env.AGENTBOARD_PERF_BUDGET_MS ?? (process.env.CI ? 300 : 100));
+  const BUDGET_MS = Number(process.env.PLANRELAY_PERF_BUDGET_MS ?? (process.env.CI ? 300 : 100));
   const EPICS = 20;
   const TASKS = 500;
   const AGENTS = 10;

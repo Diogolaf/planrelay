@@ -112,7 +112,7 @@ test('a dashboard that never records itself: a BoardError after 5 s that says wh
   const io = fakeIo();
   assert.throws(() => ensureDashboard(board, io), (err) => {
     assert.equal(/** @type {any} */ (err).name, 'BoardError');
-    assert.match(/** @type {any} */ (err).message, /^The dashboard did not start within 5 seconds\. .*`agentboard dashboard`.* in a terminal/);
+    assert.match(/** @type {any} */ (err).message, /^The dashboard did not start within 5 seconds\. .*`planrelay dashboard`.* in a terminal/);
     return true;
   });
   assert.equal(io.slept.reduce((a, b) => a + b, 0), 5000);
@@ -180,7 +180,7 @@ test('serveDashboard records the dashboard it starts, is reused while it runs, a
   const port = Number(new URL(started.url).port);
   assert.equal(started.url, `http://127.0.0.1:${port}/`);
   assert.deepEqual(JSON.parse(fs.readFileSync(dashboardFile(board), 'utf8')), { pid: process.pid, port, startedAt: 1234, board: boardId(board) });
-  assert.deepEqual(await ping(started.url), { app: 'agentboard', board: boardId(board) });
+  assert.deepEqual(await ping(started.url), { app: 'planrelay', board: boardId(board) });
 
   assert.deepEqual(await serveDashboard(board, { proc: fakeProc() }), { url: started.url, reused: true });
 
@@ -239,7 +239,7 @@ test('with idleMs, an open event stream keeps the dashboard up; the idle time co
   first.close();
   await sleep(400);
   assert.deepEqual(proc.exits, []); // one stream is still open
-  assert.deepEqual(await ping(started.url), { app: 'agentboard', board: boardId(board) });
+  assert.deepEqual(await ping(started.url), { app: 'planrelay', board: boardId(board) });
   const closedAt = Date.now();
   second.close();
   await waitFor(() => proc.exits.length > 0);
@@ -280,7 +280,7 @@ test('without idleMs, a dashboard with no browser connected keeps running', asyn
   const started = await serveDashboard(board, { proc });
   await sleep(300);
   assert.deepEqual(proc.exits, []);
-  assert.deepEqual(await ping(started.url), { app: 'agentboard', board: boardId(board) });
+  assert.deepEqual(await ping(started.url), { app: 'planrelay', board: boardId(board) });
   proc.emit('SIGTERM');
   await waitFor(() => proc.exits.length > 0);
 });

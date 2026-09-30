@@ -61,7 +61,7 @@ async function shoot(browser, url, { name, hash = '', ready, colorScheme = 'ligh
   }
 }
 
-const parent = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'agentboard-shots-')));
+const parent = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'planrelay-shots-')));
 let dash;
 let browser;
 try {

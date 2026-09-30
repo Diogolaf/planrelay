@@ -41,8 +41,8 @@ const EXIT_TIMEOUT_MS = 30_000;
 const STOP_TIMEOUT_MS = 5_000;
 
 /**
- * The board's tools, under both names its server can have: `agentboard` when it comes from
- * --mcp-config, `plugin_agentboard_agentboard` when the plugin starts it.
+ * The board's tools, under both names its server can have: `planrelay` when it comes from
+ * --mcp-config, `plugin_planrelay_planrelay` when the plugin starts it.
  */
 const BOARD_TOOLS = [`mcp__${NAME}__*`, `mcp__plugin_${NAME}_${NAME}__*`];
 /** The built-in tools a session may use without asking; it has no shell. */
@@ -433,7 +433,7 @@ export function readTurn(events) {
 
 /**
  * The board tool a call used (`claim_task`), whatever its server is called in that session
- * (`mcp__agentboard__claim_task`, `mcp__plugin_agentboard_agentboard__claim_task`); '' for any other tool.
+ * (`mcp__planrelay__claim_task`, `mcp__plugin_planrelay_planrelay__claim_task`); '' for any other tool.
  * @param {string} name
  */
 export function boardTool(name) {

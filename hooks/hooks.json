@@ -1,5 +1,5 @@
 {
-  "description": "agentboard: the session brief, board updates at each prompt, file locks, and the files and todo list of the claimed task.",
+  "description": "planrelay: the session brief, board updates at each prompt, file locks, and the files and todo list of the claimed task.",
   "hooks": {
     "SessionStart": [
       { "hooks": [{ "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/src/cli.js", "hook"], "timeout": 10 }] }

@@ -38,7 +38,7 @@ function rng(seed) {
 test('openBoard points into the git directory', () => {
   const repo = tempRepo();
   const b = openBoard(repo);
-  assert.ok(samePath(b.dir, path.join(repo, '.git', 'agentboard')));
+  assert.ok(samePath(b.dir, path.join(repo, '.git', 'planrelay')));
   assert.equal(b.config.maxPings, 8);
 });
 

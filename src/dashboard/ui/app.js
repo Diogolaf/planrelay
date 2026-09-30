@@ -64,7 +64,7 @@ const TICK_MS = 30_000;
 /** Wait before opening a new event stream when the browser gave up on the last one. */
 const RECONNECT_MS = 5_000;
 /** localStorage key prefix of the dismissed malformed-lines count, per project. */
-const DISMISSED_KEY = 'agentboard.badLinesDismissed:';
+const DISMISSED_KEY = 'planrelay.badLinesDismissed:';
 
 /**
  * The route of a location hash.
@@ -138,7 +138,7 @@ function renderHeader() {
   if (view) {
     els.project.textContent = view.project;
     els.project.title = view.project; // the full name when it is cut short
-    document.title = `${view.project} · agentboard`;
+    document.title = `${view.project} · planrelay`;
   }
   for (const tab of els.tabs) {
     if (tab.dataset.tab === route.tab) tab.setAttribute('aria-current', 'page');
@@ -179,7 +179,7 @@ function renderBanner() {
   if (count === 0) return void els.banner.replaceChildren();
   els.banner.replaceChildren(h('div', { class: 'banner', role: 'status', 'data-testid': 'banner-bad-lines' },
     h('span', { class: 'banner-text' }, `${plural(count, 'line')} of the board's log could not be read and ${count === 1 ? 'was' : 'were'} skipped.`),
-    h('span', { class: 'banner-hint' }, h('code', null, 'agentboard repair'), ' lists them.'),
+    h('span', { class: 'banner-hint' }, h('code', null, 'planrelay repair'), ' lists them.'),
     h('button', { type: 'button', class: 'banner-dismiss', onclick: () => dismiss(project, count) }, 'Dismiss')));
 }
 

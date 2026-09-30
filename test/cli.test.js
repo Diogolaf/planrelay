@@ -37,13 +37,13 @@ async function waitFor(check, timeoutMs = 10000) {
   }
 }
 
-/** Every `agentboard mcp` process started here. One a failed test left running is stopped at the end, so the run fails instead of hanging. */
+/** Every `planrelay mcp` process started here. One a failed test left running is stopped at the end, so the run fails instead of hanging. */
 const servers = [];
 after(() => {
   for (const child of servers) child.kill();
 });
 
-/** A running `agentboard mcp` process: send JSON-RPC messages, read its answers, close its input. */
+/** A running `planrelay mcp` process: send JSON-RPC messages, read its answers, close its input. */
 function mcp(env) {
   const child = spawn(process.execPath, [CLI, 'mcp'], { env: childEnv(env) });
   servers.push(child);
@@ -116,7 +116,7 @@ test('hook: a project outside git gets its board in the home folder, with spaces
   const r = hook(JSON.stringify({ hook_event_name: 'SessionStart', session_id: 's1', cwd: project }), { ...env, CLAUDE_PROJECT_DIR: project });
   assert.equal(r.status, 0);
   assert.match(JSON.parse(r.stdout).hookSpecificOutput.additionalContext, /you are agent Amber[\s\S]*Project: recipes app/);
-  assert.equal(fs.readdirSync(path.join(home, '.agentboard', 'boards')).length, 1);
+  assert.equal(fs.readdirSync(path.join(home, '.planrelay', 'boards')).length, 1);
 });
 
 test('mcp: answers initialize and tools/list over stdio, and exits when its input closes', async () => {
@@ -172,7 +172,7 @@ test('mcp: works in a project outside git', async () => {
 test('repair: rebuilds and reports', () => {
   const r = runCli(['repair'], { cwd: tempRepo() });
   assert.equal(r.status, 0);
-  assert.match(r.stdout, /^agentboard: rebuilt 0 tasks from 0 events \(board: .+\)\.\n$/);
+  assert.match(r.stdout, /^planrelay: rebuilt 0 tasks from 0 events \(board: .+\)\.\n$/);
 });
 
 test('repair: counts what it rebuilt and names skipped lines', async () => {
@@ -181,30 +181,30 @@ test('repair: counts what it rebuilt and names skipped lines', async () => {
   s.send(call(2, 'create_task', { title: 'Add a README', requestedByHuman: true }));
   await s.answer(2);
   await s.close();
-  fs.appendFileSync(path.join(repo, '.git', 'agentboard', 'events.jsonl'), 'not json\n');
+  fs.appendFileSync(path.join(repo, '.git', 'planrelay', 'events.jsonl'), 'not json\n');
   const r = runCli(['repair'], { cwd: repo });
   assert.equal(r.status, 0);
-  assert.match(r.stdout, /^agentboard: rebuilt 1 task from 1 event \(board: .+\); skipped malformed line 2\.\n$/);
+  assert.match(r.stdout, /^planrelay: rebuilt 1 task from 1 event \(board: .+\); skipped malformed line 2\.\n$/);
 });
 
 test('repair: a failure is one readable line and exit code 1', () => {
   const repo = tempRepo();
   // the board folder is a file: nothing can be written there
-  fs.writeFileSync(path.join(repo, '.git', 'agentboard'), '');
+  fs.writeFileSync(path.join(repo, '.git', 'planrelay'), '');
   const r = runCli(['repair'], { cwd: repo });
   assert.equal(r.status, 1);
-  assert.match(r.stderr, /^agentboard: repair failed: .+\n$/);
+  assert.match(r.stderr, /^planrelay: repair failed: .+\n$/);
 });
 
 test('unknown command prints usage and exits 1; help prints it and exits 0', () => {
   for (const args of [['dance'], []]) {
     const r = runCli(args);
     assert.equal(r.status, 1);
-    assert.match(r.stderr, /usage: agentboard <hook\|mcp\|repair\|dashboard>/);
+    assert.match(r.stderr, /usage: planrelay <hook\|mcp\|repair\|dashboard>/);
   }
   const r = runCli(['--help']);
   assert.equal(r.status, 0);
-  assert.match(r.stdout, /usage: agentboard <hook\|mcp\|repair\|dashboard>/);
+  assert.match(r.stdout, /usage: planrelay <hook\|mcp\|repair\|dashboard>/);
 });
 
 /** GET a path of a local server; resolves with the parsed JSON body. @param {number} port @param {string} reqPath */
@@ -232,18 +232,18 @@ test('dashboard: serves the board until stopped, records itself in dashboard.jso
   let url = '';
   try {
     await waitFor(() => out.includes('\n') || err !== '');
-    const m = /^agentboard dashboard for (.+): (http:\/\/127\.0\.0\.1:(\d+)\/) \(Ctrl\+C to stop\)\n$/.exec(out);
+    const m = /^planrelay dashboard for (.+): (http:\/\/127\.0\.0\.1:(\d+)\/) \(Ctrl\+C to stop\)\n$/.exec(out);
     assert.ok(m, `stdout: ${out} stderr: ${err}`);
     assert.equal(m[1], board.projectName);
     url = m[2];
     const port = Number(m[3]);
-    assert.deepEqual(await getJson(port, '/api/ping'), { app: 'agentboard', board: boardId(board) });
+    assert.deepEqual(await getJson(port, '/api/ping'), { app: 'planrelay', board: boardId(board) });
     const rec = JSON.parse(fs.readFileSync(file, 'utf8'));
     assert.deepEqual({ pid: rec.pid, port: rec.port, board: rec.board }, { pid: child.pid, port, board: boardId(board) });
 
     const again = runCli(['dashboard', '--no-open', '--dir', repo], { timeout: 10000 });
     assert.equal(again.status, 0, again.stderr);
-    assert.equal(again.stdout, `agentboard dashboard for ${board.projectName} is already running: ${url}\n`);
+    assert.equal(again.stdout, `planrelay dashboard for ${board.projectName} is already running: ${url}\n`);
   } finally {
     child.kill('SIGINT');
   }
@@ -272,7 +272,7 @@ test('dashboard --idle-exit: with no browser connected, it stops by itself, clea
   const timer = setTimeout(() => child.kill(), 10000);
   try {
     await waitFor(() => out.includes('\n') || err !== '');
-    assert.match(out, /^agentboard dashboard for .+: http:\/\/127\.0\.0\.1:\d+\/ \(Ctrl\+C to stop\)\n$/, err);
+    assert.match(out, /^planrelay dashboard for .+: http:\/\/127\.0\.0\.1:\d+\/ \(Ctrl\+C to stop\)\n$/, err);
     assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).pid, child.pid);
     assert.equal(await exited, 0, err);
     assert.equal(fs.existsSync(file), false);
@@ -283,7 +283,7 @@ test('dashboard --idle-exit: with no browser connected, it stops by itself, clea
 });
 
 test('dashboard: a bad --port or --idle-exit, an unknown option or a folder that does not exist prints why and exits 1', () => {
-  const usage = /^usage: agentboard dashboard \[--port N\] \[--dir PATH\] \[--no-open\] \[--idle-exit MINUTES\]\n$/;
+  const usage = /^usage: planrelay dashboard \[--port N\] \[--dir PATH\] \[--no-open\] \[--idle-exit MINUTES\]\n$/;
   const bad = [
     ['--port', 'abc'], ['--port', '70000'], ['--port', '-1'], ['--port', '80.5'], ['--port'], ['--verbose'], ['extra'],
     ['--idle-exit', '0'], ['--idle-exit', 'soon'], ['--idle-exit', '-5'], ['--idle-exit', '99999'], ['--idle-exit'],
@@ -296,5 +296,5 @@ test('dashboard: a bad --port or --idle-exit, an unknown option or a folder that
   const missing = path.join(tempDir(), 'no such folder');
   const r = runCli(['dashboard', '--no-open', '--dir', missing], { timeout: 10000 });
   assert.equal(r.status, 1);
-  assert.match(r.stderr, /^agentboard: dashboard failed: .*no such folder.* is not a folder\n$/);
+  assert.match(r.stderr, /^planrelay: dashboard failed: .*no such folder.* is not a folder\n$/);
 });

@@ -394,7 +394,7 @@ function removeTempFiles(board) {
 }
 
 /**
- * Rebuilds every snapshot from events.jsonl (`agentboard repair`). Strict: a derived file that
+ * Rebuilds every snapshot from events.jsonl (`planrelay repair`). Strict: a derived file that
  * cannot be written is an error. Returns the rebuilt state and the skipped lines.
  */
 export function repair(board) {

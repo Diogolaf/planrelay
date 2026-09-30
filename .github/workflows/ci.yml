@@ -63,7 +63,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      AGENTBOARD_DENYLIST: ${{ secrets.AGENTBOARD_DENYLIST }}
+      PLANRELAY_DENYLIST: ${{ secrets.PLANRELAY_DENYLIST }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -79,14 +79,14 @@ jobs:
           ACTOR: ${{ github.actor }}
           FORK: ${{ github.event.repository.fork }}
         run: |
-          if [ -n "$AGENTBOARD_DENYLIST" ]; then
+          if [ -n "$PLANRELAY_DENYLIST" ]; then
             echo "present=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           echo "present=false" >> "$GITHUB_OUTPUT"
           # forks and Dependabot have no secrets; a push to this repository must have the list
           if [ "$EVENT" = "push" ] && [ "$FORK" != "true" ] && [ "$ACTOR" != "dependabot[bot]" ]; then
-            echo "::error::The AGENTBOARD_DENYLIST secret is not set."
+            echo "::error::The PLANRELAY_DENYLIST secret is not set."
             exit 1
           fi
           echo "::notice::No private list here (a fork or Dependabot); the denylist checks were skipped."

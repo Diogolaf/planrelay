@@ -8,9 +8,9 @@ import { tempDir } from '../helpers.js';
 /** A project folder whose config.json holds `content` (an object, a string or raw bytes). */
 function withConfig(content) {
   const root = tempDir();
-  fs.mkdirSync(path.join(root, '.agentboard'));
+  fs.mkdirSync(path.join(root, '.planrelay'));
   const data = typeof content === 'string' || Buffer.isBuffer(content) ? content : JSON.stringify(content);
-  fs.writeFileSync(path.join(root, '.agentboard', 'config.json'), data);
+  fs.writeFileSync(path.join(root, '.planrelay', 'config.json'), data);
   return root;
 }
 
@@ -56,16 +56,16 @@ test('UTF-16 with a BOM is accepted (Notepad "Unicode", PowerShell 5 Out-File)',
 
 test('an unreadable config (a folder at config.json) means defaults and one problem', () => {
   const root = tempDir();
-  fs.mkdirSync(path.join(root, '.agentboard', 'config.json'), { recursive: true });
+  fs.mkdirSync(path.join(root, '.planrelay', 'config.json'), { recursive: true });
   const { config, problems } = readConfig(root);
   assert.equal(config, DEFAULTS);
-  assert.deepEqual(problems, ['could not read .agentboard/config.json (EISDIR)']);
+  assert.deepEqual(problems, ['could not read .planrelay/config.json (EISDIR)']);
   assert.deepEqual(loadConfig(root), DEFAULTS);
 });
 
-test('a file where the .agentboard folder should be counts as no config (ENOTDIR like ENOENT)', (t) => {
+test('a file where the .planrelay folder should be counts as no config (ENOTDIR like ENOENT)', (t) => {
   const root = tempDir();
-  fs.writeFileSync(path.join(root, '.agentboard'), 'not a folder');
+  fs.writeFileSync(path.join(root, '.planrelay'), 'not a folder');
   assert.deepEqual(readConfig(root), { config: DEFAULTS, problems: [] }); // ENOENT on Windows, ENOTDIR on POSIX
   t.mock.method(fs, 'readFileSync', () => { throw Object.assign(new Error('simulated'), { code: 'ENOTDIR' }); });
   assert.deepEqual(readConfig(root), { config: DEFAULTS, problems: [] });
@@ -73,14 +73,14 @@ test('a file where the .agentboard folder should be counts as no config (ENOTDIR
 
 test('other read errors (for example EACCES) mean defaults and one problem', (t) => {
   t.mock.method(fs, 'readFileSync', () => { throw Object.assign(new Error('simulated'), { code: 'EACCES' }); });
-  assert.deepEqual(readConfig(tempDir()), { config: DEFAULTS, problems: ['could not read .agentboard/config.json (EACCES)'] });
+  assert.deepEqual(readConfig(tempDir()), { config: DEFAULTS, problems: ['could not read .planrelay/config.json (EACCES)'] });
 });
 
 test('readConfig never throws, even for a bad root', () => {
   const { config, problems } = readConfig(/** @type {any} */ (undefined));
   assert.equal(config, DEFAULTS);
   assert.equal(problems.length, 1);
-  assert.match(problems[0], /^could not read \.agentboard\/config\.json \(/);
+  assert.match(problems[0], /^could not read \.planrelay\/config\.json \(/);
 });
 
 test('invalid JSON (trailing comma, comments, empty) means defaults and one problem', () => {
@@ -208,7 +208,7 @@ test('every returned config is frozen', () => {
   assert.equal(loadConfig(tempDir()).maxPings, 8);
 });
 
-test('rulesPath points at .agentboard/rules.md', () => {
+test('rulesPath points at .planrelay/rules.md', () => {
   const root = tempDir();
-  assert.equal(rulesPath(root), path.join(root, '.agentboard', 'rules.md'));
+  assert.equal(rulesPath(root), path.join(root, '.planrelay', 'rules.md'));
 });

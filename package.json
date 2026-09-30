@@ -1,14 +1,14 @@
 {
-  "name": "agentboard",
+  "name": "planrelay",
   "version": "0.1.0",
   "description": "A local task board for AI coding agents, with a read-only live dashboard. A Claude Code plugin and a CLI.",
   "keywords": ["claude-code", "claude-code-plugin", "mcp", "ai-agents", "tasks", "kanban", "board", "handoff"],
   "type": "module",
   "license": "MIT",
-  "author": "agentboard contributors",
+  "author": "planrelay contributors",
   "private": true,
   "engines": { "node": ">=22" },
-  "bin": { "agentboard": "src/cli.js" },
+  "bin": { "planrelay": "src/cli.js" },
   "files": ["src/", ".claude-plugin/", "hooks/", "skills/"],
   "scripts": {
     "test": "node --test \"test/**/*.test.js\"",

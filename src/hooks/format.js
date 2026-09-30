@@ -116,7 +116,7 @@ export function formatBrief({ agentName, projectName, state, reg, agentId, pings
 
   const lines = [`Project: ${projectName}`];
   if (configProblems.length) {
-    lines.push(`Config problems in .agentboard/config.json (tell the human; defaults are used): ${configProblems.join('; ')}`);
+    lines.push(`Config problems in .planrelay/config.json (tell the human; defaults are used): ${configProblems.join('; ')}`);
   }
   const held = claimedBy(state, agentId);
   const mine = held && getTask(state, reg, held.id, []); // no messages: the brief needs none

@@ -1,7 +1,7 @@
 // Integration tests: run the leak guard CLI as a child process inside throwaway git
 // repositories. Every term, name and e-mail here is invented.
 // Children never see the maintainer's setup: HOME/USERPROFILE point at the temp folder,
-// inherited GIT_* and AGENTBOARD_* variables are dropped, and git ignores system and
+// inherited GIT_* and PLANRELAY_* variables are dropped, and git ignores system and
 // global config. So a test can never read the private list or touch this repository.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -29,7 +29,7 @@ function tempRepo() {
   const env = {};
   for (const [key, value] of Object.entries(process.env)) {
     const k = key.toUpperCase();
-    if (k.startsWith('GIT_') || k.startsWith('AGENTBOARD_')) continue;
+    if (k.startsWith('GIT_') || k.startsWith('PLANRELAY_')) continue;
     env[key] = value;
   }
   Object.assign(env, {
@@ -38,8 +38,8 @@ function tempRepo() {
     GIT_CONFIG_NOSYSTEM: '1',
     GIT_CONFIG_GLOBAL: path.join(home, 'gitconfig'),
     GIT_CEILING_DIRECTORIES: dir,
-    AGENTBOARD_DENYLIST: LIST,
-    AGENTBOARD_DENYLIST_FILE: path.join(home, 'no-such-list.txt'),
+    PLANRELAY_DENYLIST: LIST,
+    PLANRELAY_DENYLIST_FILE: path.join(home, 'no-such-list.txt'),
   });
 
   /** Runs git and returns the result; `extra` adds environment variables. */
@@ -249,7 +249,7 @@ test('unknown modes and missing arguments print usage and exit 2', () => {
 
 test('a missing list fails closed', () => {
   const { run } = tempRepo();
-  const r = run(['--all'], { AGENTBOARD_DENYLIST: null });
+  const r = run(['--all'], { PLANRELAY_DENYLIST: null });
   assert.equal(r.status, 1, r.stderr);
   assert.match(r.stderr, /no denylist found/);
 });
@@ -259,13 +259,13 @@ test('a wrongly encoded list fails loudly instead of scanning with garbage', () 
   const file = path.join(home, 'list-utf16-no-bom.txt');
   // UTF-16 without a BOM: ASCII terms come out full of NULs...
   fs.writeFileSync(file, Buffer.from('zorbacorp\nquux-project\n', 'utf16le'));
-  const ascii = run(['--all'], { AGENTBOARD_DENYLIST: null, AGENTBOARD_DENYLIST_FILE: file });
+  const ascii = run(['--all'], { PLANRELAY_DENYLIST: null, PLANRELAY_DENYLIST_FILE: file });
   assert.equal(ascii.status, 1, ascii.stderr);
   assert.match(ascii.stderr, /control character/);
   assertNoLeak(ascii);
   // ...and accented ones are not even valid UTF-8.
   fs.writeFileSync(file, Buffer.from(LIST, 'utf16le'));
-  const accented = run(['--all'], { AGENTBOARD_DENYLIST: null, AGENTBOARD_DENYLIST_FILE: file });
+  const accented = run(['--all'], { PLANRELAY_DENYLIST: null, PLANRELAY_DENYLIST_FILE: file });
   assert.equal(accented.status, 1, accented.stderr);
   assert.match(accented.stderr, /not valid UTF-8/);
   assertNoLeak(accented);

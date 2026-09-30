@@ -1,18 +1,12 @@
-# Releasing agentboard
+# Releasing planrelay
 
 A checklist for the maintainer. Do the steps in order, and do not skip the checks: they are what keeps private data out of a public repository.
 
-`<owner>`, `<repo>` and `<name>` stand for the GitHub account, the repository and the final name of the tool.
+`<owner>` and `<repo>` stand for the GitHub account and the repository. The tool's name is `planrelay`, and the plugin installs as `planrelay@planrelay`.
 
 ## 1. Before anything is pushed
 
-- [ ] **Choose the final name.** `agentboard` is a working name and cannot be the published one: an unrelated package of that name is already on npm. Before renaming anything, check that the new name is free: `npm view <name>` must answer with a 404 error, and a search on GitHub should find no project of that name. A scoped name (`@<owner>/<name>`) is the other way out.
-- [ ] **Rename.** The name is in many files, so do it mechanically:
-  - replace `agentboard` and `AGENTBOARD` in every tracked file outside `docs/plans/` (the plans are history);
-  - `git mv skills/agentboard skills/<name>`;
-  - you are done when `git grep -i agentboard -- . ':!docs/plans'` prints nothing;
-  - the leak guard's names change with it: the `AGENTBOARD_DENYLIST` and `AGENTBOARD_DENYLIST_FILE` variables and the default folder `~/.agentboard-dev/`. Move your private list to the new folder, or every hook fails with "no denylist found";
-  - then run every check of this section. The old name stays in the history (commit messages and old file contents).
+- [ ] **Check that the name is still free.** `npm view planrelay` must answer with a 404 error. (It was free, with no project of that name found on GitHub, when the name was chosen on 2026-10-01.) If it is taken by then, a scoped name (`@<owner>/planrelay`) is the way out.
 - [ ] **Merge into `main`** and delete the merged feature branches, so the next step rewrites one branch and the first push publishes one.
 - [ ] **Create the GitHub account that publishes the project.** In its e-mail settings, turn on "Keep my email addresses private" and "Block command line pushes that expose my email". The first one matters for CI: GitHub writes merge commits with the account's e-mail, and the history check refuses any address that is not a no-reply one.
 - [ ] **Rewrite the commit identities.** Set this repository's `user.name` to the account's login and `user.email` to its no-reply address (`<id>+<owner>@users.noreply.github.com`). Then rewrite the author and the committer of every commit, in Git Bash:
@@ -38,7 +32,7 @@ A checklist for the maintainer. Do the steps in order, and do not skip the check
 ## 2. The first push
 
 - [ ] Create the repository as **private**. While it is private, the protection against leaks is this repository's own: the hooks before each commit and push, and the `gitleaks` and `denylist` jobs in CI. GitHub's secret scanning and push protection are not available for a private repository of a free personal account.
-- [ ] Add the repository secret `AGENTBOARD_DENYLIST` (or its new name): the private list, one term per line. Without it, the `denylist` job fails on every push. Add the same secret under Dependabot's secrets if its pull requests should be checked too.
+- [ ] Add the repository secret `PLANRELAY_DENYLIST`: the private list, one term per line. Without it, the `denylist` job fails on every push. Add the same secret under Dependabot's secrets if its pull requests should be checked too.
 - [ ] Add the remote with credentials of the new account only: an SSH key made for it (selected with `core.sshCommand`), or a credential helper that holds nothing else. Never push with another account's cached login.
 - [ ] Make sure the hooks are on in the checkout you push from: `git config core.hooksPath .githooks`. The `pre-push` hook is a tracked file, so a checkout of an older commit does not have it.
 - [ ] `git push -u origin main`. The hook checks everything the push would publish and refuses it while a commit still carries the placeholder e-mail (`@example.invalid`).
@@ -49,7 +43,7 @@ A checklist for the maintainer. Do the steps in order, and do not skip the check
 In a throwaway project. While the repository is private, Claude Code must be able to clone it without asking: it uses the machine's default SSH key, or the stored git credentials, and neither is the new account's. Give the new account's key a host alias in `~/.ssh/config`, then:
 
     /plugin marketplace add git@<alias>:<owner>/<repo>.git
-    /plugin install <name>@<name>
+    /plugin install planrelay@planrelay
 
 - [ ] Before installing, make sure no older copy of the plugin or of its server is still registered in Claude Code, so the two do not both load.
 - [ ] Ask "what does the board say?", create a task, and say "open the board".
@@ -60,17 +54,17 @@ In a throwaway project. While the repository is private, Claude Code must be abl
 - [ ] Run `npm run check:history` and `gitleaks git --redact --no-banner .` once more.
 - [ ] Read the repository as a stranger would: the README, the docs, the commit messages, the file names.
 - [ ] If the history had to be rewritten after the first push, do not make this repository public. A forced push leaves the old commits on GitHub, reachable by their hash. Delete the repository and create a new one from the clean history. Delete any CI run whose log you would not want public.
-- [ ] Update the README for a public repository, commit and push: the status line, and the install commands (`/plugin marketplace add <owner>/<repo>`, `/plugin install <name>@<name>`).
+- [ ] Update the README for a public repository, commit and push: the status line, and the install commands (`/plugin marketplace add <owner>/<repo>`, `/plugin install planrelay@planrelay`).
 - [ ] Make the repository public. Then check, in its security settings, that secret scanning and push protection are on.
 - [ ] Remove the marketplace added in section 3 and add it again with the exact command the README shows.
 
 ## 5. npm
 
 - [ ] In `package.json`, add `repository`, `homepage` and `bugs`, and remove `"private": true`. The `repository` field also makes the README's screenshots work on the package's npm page (the images are not in the package).
-- [ ] Update the README's lines that depend on npm, because the package carries the README and the npm page shows it until the next version: the status line, the sentence about a local copy in Install, the dashboard commands (`npx <name> dashboard`) and the `repair` command. Commit and push.
+- [ ] Update the README's lines that depend on npm, because the package carries the README and the npm page shows it until the next version: the status line, the sentence about a local copy in Install, the dashboard commands (`npx planrelay dashboard`) and the `repair` command. Commit and push.
 - [ ] `npm run check:pack`, then `npm pack --dry-run` and read the file list.
 - [ ] `npm login` with an npm account that belongs to the project, with two-factor authentication on. Then `npm publish` from that commit (it runs the package check again first), and tag the commit.
-- [ ] In a throwaway project: `npx <name> dashboard`.
+- [ ] In a throwaway project: `npx planrelay dashboard`.
 
 ## 6. Every later release
 

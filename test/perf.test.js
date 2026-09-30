@@ -10,7 +10,7 @@ import { tempRepo, T0, MIN } from './helpers.js';
  * The per-hook budget (§9), measured in-process for one hook call. Node's own start-up, roughly
  * 40–80 ms, comes on top and is outside the tool's control.
  */
-const BUDGET_MS = Number(process.env.AGENTBOARD_PERF_BUDGET_MS ?? (process.env.CI ? 300 : 100));
+const BUDGET_MS = Number(process.env.PLANRELAY_PERF_BUDGET_MS ?? (process.env.CI ? 300 : 100));
 const RUNS = 7;
 const TASKS = 500;
 

@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { npmPack } from './lib/pack.mjs';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
-const dest = fs.mkdtempSync(path.join(os.tmpdir(), 'agentboard-pack-'));
+const dest = fs.mkdtempSync(path.join(os.tmpdir(), 'planrelay-pack-'));
 try {
   const tarball = npmPack(ROOT, dest);
   const r = spawnSync(process.execPath, [path.join(ROOT, 'scripts', 'check-denylist.mjs'), '--tarball', tarball], { stdio: 'inherit' });

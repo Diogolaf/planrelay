@@ -1,10 +1,10 @@
 {
-  "name": "agentboard",
-  "owner": { "name": "agentboard contributors" },
-  "metadata": { "description": "agentboard: a local task board for AI coding agents." },
+  "name": "planrelay",
+  "owner": { "name": "planrelay contributors" },
+  "metadata": { "description": "planrelay: a local task board for AI coding agents." },
   "plugins": [
     {
-      "name": "agentboard",
+      "name": "planrelay",
       "source": "./",
       "description": "A local task board for AI coding agents: create, claim, discuss and hand off tasks across sessions."
     }

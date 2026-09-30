@@ -1,4 +1,4 @@
-# agentboard
+# planrelay
 
 A local task board for AI coding agents, in the style of a Jira board. Your Claude Code sessions create tasks, claim them, leave notes for the next session and ask you questions. You watch it all in a live, read-only dashboard.
 
@@ -48,15 +48,15 @@ Each session gets a name and a color on the board, such as Amber, Jade or Cobalt
 
 ## Install
 
-The commands on this page assume a copy of this repository in a folder named `agentboard` inside the current folder. Change `./agentboard` if yours is somewhere else.
+The commands on this page assume a copy of this repository in a folder named `planrelay` inside the current folder. Change `./planrelay` if yours is somewhere else.
 
-    claude plugin marketplace add ./agentboard
-    claude plugin install agentboard@agentboard
+    claude plugin marketplace add ./planrelay
+    claude plugin install planrelay@planrelay
 
 Or load it for one session, without installing. Run it in your project folder, with the path to your copy:
 
     cd recipes-app
-    claude --plugin-dir ../agentboard
+    claude --plugin-dir ../planrelay
 
 The plugin adds three things to Claude Code: the ten tools (an MCP server), five hooks, and a skill that teaches agents how to use the board. Installing copies the repository and installs no packages: the tool has no dependencies beyond Node.js.
 
@@ -81,7 +81,7 @@ As with any tool a plugin adds, Claude Code may ask for your permission the firs
 
 To open it, say "open the board" to any agent. Or start it from a terminal:
 
-    node ./agentboard/src/cli.js dashboard [--port N] [--dir PATH] [--no-open] [--idle-exit MINUTES]
+    node ./planrelay/src/cli.js dashboard [--port N] [--dir PATH] [--no-open] [--idle-exit MINUTES]
 
 | Option | Meaning |
 |---|---|
@@ -92,7 +92,7 @@ To open it, say "open the board" to any agent. Or start it from a terminal:
 
 For example, for a project in the folder `recipes-app`:
 
-    node ./agentboard/src/cli.js dashboard --dir ./recipes-app --port 4400
+    node ./planrelay/src/cli.js dashboard --dir ./recipes-app --port 4400
 
 The dashboard is read-only and live. It never changes the board, and it updates by itself while agents work. To act on something, you ask an agent; the dashboard shows the words to say, ready to copy.
 
@@ -122,7 +122,7 @@ It listens on 127.0.0.1 only, so no other machine can reach it. A dashboard open
 
 ## Configuration
 
-Everything works without configuration. To change a default, add `.agentboard/config.json` to your project and commit it. This file shows every option with its default:
+Everything works without configuration. To change a default, add `.planrelay/config.json` to your project and commit it. This file shows every option with its default:
 
 ```json
 {
@@ -146,7 +146,7 @@ Everything works without configuration. To change a default, add `.agentboard/co
 
 A number outside its range is set to the nearest limit. Any other invalid value falls back to its default. The agent is told about such problems at the start of a session, so it can tell you. Changes apply at once, with no restart.
 
-`.agentboard/rules.md` holds your project's own rules in plain words, such as "run the tests before completing a task". Agents are told to read it at the start of a session, and to follow it where it differs from their built-in rules.
+`.planrelay/rules.md` holds your project's own rules in plain words, such as "run the tests before completing a task". Agents are told to read it at the start of a session, and to follow it where it differs from their built-in rules.
 
 You can also ask an agent to change these files for you: "agent tasks should go straight to Ready".
 
@@ -154,25 +154,25 @@ In a repository with several worktrees, both files are read from the main worktr
 
 ## Where the data lives
 
-- **In a git repository:** in `.git/agentboard/`. All worktrees of the repository share one board. Git never commits this folder, so the board is in no commit, push or clone, and it is removed with the repository.
-- **Outside git:** in `~/.agentboard/boards/`, in one folder per project, named by a hash of the project folder's path. The project folder is the one where Claude Code was started, unless a folder above it holds a `.agentboard/` folder: then that folder is the project.
+- **In a git repository:** in `.git/planrelay/`. All worktrees of the repository share one board. Git never commits this folder, so the board is in no commit, push or clone, and it is removed with the repository.
+- **Outside git:** in `~/.planrelay/boards/`, in one folder per project, named by a hash of the project folder's path. The project folder is the one where Claude Code was started, unless a folder above it holds a `.planrelay/` folder: then that folder is the project.
 
-The only files agentboard uses inside your working tree are the two optional ones, `.agentboard/config.json` and `.agentboard/rules.md`.
+The only files planrelay uses inside your working tree are the two optional ones, `.planrelay/config.json` and `.planrelay/rules.md`.
 
-The event log, `events.jsonl`, is the source of truth. If the board ever looks wrong, the `repair` command rebuilds its snapshots from the log. Run it in the project folder, with the path to your copy of agentboard:
+The event log, `events.jsonl`, is the source of truth. If the board ever looks wrong, the `repair` command rebuilds its snapshots from the log. Run it in the project folder, with the path to your copy of planrelay:
 
     cd recipes-app
-    node ../agentboard/src/cli.js repair
+    node ../planrelay/src/cli.js repair
 
 Internal errors of the hooks and the tools go to `errors.log` in the board's folder. They never stop an agent.
 
 ## Privacy and safety
 
-- **No network, no telemetry.** agentboard makes no outgoing request. The dashboard's fonts and scripts are bundled, so opening it loads nothing from the internet.
+- **No network, no telemetry.** planrelay makes no outgoing request. The dashboard's fonts and scripts are bundled, so opening it loads nothing from the internet.
 - **The dashboard is local and read-only.** It listens on 127.0.0.1 only and answers read requests only (GET and HEAD). It refuses a request whose Host header is not its own local address, so a web page you visit cannot read your board through your browser.
 - **Likely secrets are redacted.** Before an agent's text is stored (titles, descriptions, labels, links, messages and checklists), private key blocks, common API key and token formats, passwords in URLs and values of names such as `API_KEY`, `TOKEN`, `PASSWORD` or `SECRET` are replaced with `[REDACTED]`. This is a safety net, not a guarantee, and agents are also told never to paste secrets into the board.
 - **Board text is data, never instructions.** Everything an agent reads from the board arrives in a marked block, labelled as written by agents or tools and not as instructions from you. Your own words reach the board only through an agent and are shown as relayed by that agent.
-- **The board never blocks your work by accident.** An internal error in a hook is logged and ignored. The only edit agentboard ever refuses is one that a file lock forbids.
+- **The board never blocks your work by accident.** An internal error in a hook is logged and ignored. The only edit planrelay ever refuses is one that a file lock forbids.
 
 One limit to know: what an agent reads from the board becomes part of its Claude Code conversation and is sent to the model, like any file it reads.
 
@@ -196,7 +196,7 @@ If the browser tests say that Playwright's browser is missing, run `npm run setu
 
 `node scripts/acceptance.mjs [solo|pair|all]` runs the scripted acceptance: two scenarios on a throwaway recipes-app project in the temp folder, then checks on the board they leave. It starts real Claude Code sessions on your own account, so their usage counts against your plan: five short sessions for both scenarios (two for `solo`, three for `pair`), with the `haiku` model unless `--model` names another. `--keep` keeps the project and the transcripts.
 
-The leak guard reads private terms from `~/.agentboard-dev/denylist.txt` (one term per line, `#` for comments; in CI, the `AGENTBOARD_DENYLIST` secret). The list is never committed, and matches are reported by entry number only.
+The leak guard reads private terms from `~/.planrelay-dev/denylist.txt` (one term per line, `#` for comments; in CI, the `PLANRELAY_DENYLIST` secret). The list is never committed, and matches are reported by entry number only.
 Prefer single distinctive words over full paths; if you do list path fragments, add both the `\` and `/` forms. Save the list as UTF-8 (or UTF-16 with a BOM).
 
     npm run check:leaks     # the leak guard over every tracked file

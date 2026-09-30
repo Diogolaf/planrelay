@@ -1,5 +1,5 @@
 {
-  "name": "agentboard-ui-tests",
+  "name": "planrelay-ui-tests",
   "private": true,
   "type": "module",
   "description": "Development only: Playwright for the dashboard's browser tests and screenshots.",

@@ -2,7 +2,7 @@
 import { NAME } from './name.js';
 
 /**
- * The `agentboard` command (§3):
+ * The `planrelay` command (§3):
  * - `hook`: every Claude Code hook (§9). Reads the hook's JSON on stdin and prints the output.
  *   Fail-open: it always exits 0 and never throws, whatever the input.
  * - `mcp`: the agent tools (§8) over stdio, for the session's project.

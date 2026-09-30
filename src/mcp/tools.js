@@ -456,7 +456,7 @@ function unavailableServer(folder, err) {
 }
 
 /**
- * Entry point for `agentboard mcp`: serves the board of the session's project over stdio until
+ * Entry point for `planrelay mcp`: serves the board of the session's project over stdio until
  * the client closes its input. Identity comes from CLAUDE_CODE_SESSION_ID and the host process
  * (hostPid: CLAUDE_PID, which Claude Code does not give MCP servers, else the parent process,
  * which then only matches agents and is never stored) (§4).

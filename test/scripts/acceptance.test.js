@@ -49,16 +49,16 @@ function fake(script = []) {
 }
 
 test('claudeArgs builds the flags of a headless session', () => {
-  const flags = { pluginDir: '/plugins/agentboard', mcpConfig: '/tmp/mcp.json', model: 'haiku', budgetUsd: 0.4 };
+  const flags = { pluginDir: '/plugins/planrelay', mcpConfig: '/tmp/mcp.json', model: 'haiku', budgetUsd: 0.4 };
   const oneShot = [
-    '-p', '--model', 'haiku', '--plugin-dir', '/plugins/agentboard',
+    '-p', '--model', 'haiku', '--plugin-dir', '/plugins/planrelay',
     '--setting-sources', 'project,local',
     '--strict-mcp-config', '--mcp-config', '/tmp/mcp.json',
     '--permission-mode', 'acceptEdits',
     // the board's server has one name from --mcp-config and another when the plugin starts it
-    '--allowedTools', 'mcp__agentboard__*', 'mcp__plugin_agentboard_agentboard__*', 'Read', 'Edit', 'Write', 'Glob', 'Grep', 'TodoWrite',
+    '--allowedTools', 'mcp__planrelay__*', 'mcp__plugin_planrelay_planrelay__*', 'Read', 'Edit', 'Write', 'Glob', 'Grep', 'TodoWrite',
     // no shell, and no dashboard left running behind the run
-    '--disallowedTools', 'Bash', 'PowerShell', 'mcp__agentboard__open_board', 'mcp__plugin_agentboard_agentboard__open_board',
+    '--disallowedTools', 'Bash', 'PowerShell', 'mcp__planrelay__open_board', 'mcp__plugin_planrelay_planrelay__open_board',
     '--output-format', 'stream-json', '--verbose',
     '--max-budget-usd', '0.4', '--no-session-persistence',
   ];
@@ -84,8 +84,8 @@ test('childEnv drops the session variables of a surrounding Claude Code session 
 
 test('a Windows command line holds the command and its flags, each quoted, and refuses what a shell would read', () => {
   assert.equal(
-    windowsCommandLine(['claude', '-p', '--plugin-dir', 'C:\\Plugin Root\\', '--setting-sources', 'project,local', '--allowedTools', 'mcp__agentboard__*']),
-    '"claude" "-p" "--plugin-dir" "C:\\Plugin Root\\\\" "--setting-sources" "project,local" "--allowedTools" "mcp__agentboard__*"',
+    windowsCommandLine(['claude', '-p', '--plugin-dir', 'C:\\Plugin Root\\', '--setting-sources', 'project,local', '--allowedTools', 'mcp__planrelay__*']),
+    '"claude" "-p" "--plugin-dir" "C:\\Plugin Root\\\\" "--setting-sources" "project,local" "--allowedTools" "mcp__planrelay__*"',
   );
   for (const bad of ['say "hello"', '100%', 'two\nlines']) assert.throws(() => windowsCommandLine(['claude', bad]), /cannot go on a Windows command line/);
 });
@@ -103,8 +103,8 @@ test('on Windows the flags reach a command that is a .cmd file unchanged', { ski
 
 test('mcpConfigOf repeats the plugin\'s MCP server, with the plugin\'s folder filled in', () => {
   const config = mcpConfigOf(ROOT);
-  assert.deepEqual(config, { mcpServers: { agentboard: { command: 'node', args: [`${ROOT.split(path.sep).join('/')}/src/cli.js`, 'mcp'] } } });
-  assert.ok(fs.existsSync(config.mcpServers.agentboard.args[0]));
+  assert.deepEqual(config, { mcpServers: { planrelay: { command: 'node', args: [`${ROOT.split(path.sep).join('/')}/src/cli.js`, 'mcp'] } } });
+  assert.ok(fs.existsSync(config.mcpServers.planrelay.args[0]));
 });
 
 test('runSession sends the prompt on stdin and returns the turn: text, tool calls with their results, cost', async () => {
@@ -116,7 +116,7 @@ test('runSession sends the prompt on stdin and returns the turn: text, tool call
         role: 'assistant',
         content: [
           { type: 'thinking', thinking: 'The task first.' }, { type: 'text', text: 'I will claim the task.' },
-          { type: 'tool_use', id: 't1', name: 'mcp__plugin_agentboard_agentboard__claim_task', input: { id: 2 } },
+          { type: 'tool_use', id: 't1', name: 'mcp__plugin_planrelay_planrelay__claim_task', input: { id: 2 } },
         ],
       },
     },
@@ -150,12 +150,12 @@ test('runSession sends the prompt on stdin and returns the turn: text, tool call
     text: 'The board said: #2 waits on #1.',
     cost: 0.0375,
     tools: [
-      { name: 'mcp__plugin_agentboard_agentboard__claim_task', input: { id: 2 }, output: '#2 waits on #1.\nPick a Ready task instead.', isError: true },
+      { name: 'mcp__plugin_planrelay_planrelay__claim_task', input: { id: 2 }, output: '#2 waits on #1.\nPick a Ready task instead.', isError: true },
       { name: 'Read', input: { file_path: 'recipes.md' }, output: '# Recipes', isError: false },
     ],
   });
   assert.equal(boardTool(turn.tools[0].name), 'claim_task');
-  assert.equal(boardTool('mcp__agentboard__claim_task'), 'claim_task');
+  assert.equal(boardTool('mcp__planrelay__claim_task'), 'claim_task');
   assert.equal(boardTool('Read'), '');
 
   const [started, asked, ...more] = f.log();
@@ -169,7 +169,7 @@ test('runSession sends the prompt on stdin and returns the turn: text, tool call
   // the transcript holds every line the session printed, from the init line to the result
   const lines = fs.readFileSync(transcript, 'utf8').trimEnd().split('\n').map((l) => JSON.parse(l));
   assert.equal(lines.length, 11);
-  assert.deepEqual([lines[0].type, lines[0].subtype, lines[0].mcp_servers], ['system', 'init', [{ name: 'agentboard', status: 'connected' }]]);
+  assert.deepEqual([lines[0].type, lines[0].subtype, lines[0].mcp_servers], ['system', 'init', [{ name: 'planrelay', status: 'connected' }]]);
   assert.equal(lines.at(-1).type, 'result');
   assert.equal(fs.existsSync(path.join(f.dir, 'B.stderr.txt')), false);
 });
@@ -222,7 +222,7 @@ test('a turn that ends in an error, or a session that exits early, is reported w
   assert.equal(pidAlive(early.log()[0].pid), false);
   // a command that is not there: the shell says so on Windows, the spawn fails elsewhere
   await assert.rejects(
-    runSession({ ...fake().opts, command: ['agentboard-no-such-command'], label: 'first', prompt: 'go' }),
+    runSession({ ...fake().opts, command: ['planrelay-no-such-command'], label: 'first', prompt: 'go' }),
     failure(/^first: (could not be started \(.*ENOENT.*\)|the session exited \(code [1-9]\d*\) before it answered)$/, { text: '', cost: 0, tools: [] }),
   );
 });
@@ -394,7 +394,7 @@ test('checkPair passes on the board a good run leaves, and names what is missing
   assert.equal(fs.readFileSync(path.join(repo, 'recipes.md'), 'utf8').includes(REFUSED_LINE), false);
 
   // the board's tools under the name they have when the plugin starts the server
-  const renamed = (turn) => ({ ...turn, tools: turn.tools.map((t) => ({ ...t, name: t.name.replace('mcp__agentboard__', 'mcp__plugin_agentboard_agentboard__') })) });
+  const renamed = (turn) => ({ ...turn, tools: turn.tools.map((t) => ({ ...t, name: t.name.replace('mcp__planrelay__', 'mcp__plugin_planrelay_planrelay__') })) });
   assert.equal(boardTool(renamed(turns.B[0]).tools[0].name), 'claim_task');
   assert.deepEqual(verdicts(pair(repo, { ...turns, B: turns.B.map(renamed) })), Array(6).fill('ok'));
 
@@ -463,14 +463,14 @@ function runScript(args, script, extraEnv = {}) {
   const logFile = path.join(tempDir(), 'fake.log');
   const env = {
     ...plainEnv('TMPDIR', 'TEMP', 'TMP'), TMPDIR: tmp, TEMP: tmp, TMP: tmp,
-    AGENTBOARD_ACCEPTANCE_CLAUDE: JSON.stringify(COMMAND), FAKE_CLAUDE_SCRIPT: JSON.stringify(script), FAKE_CLAUDE_LOG: logFile, ...extraEnv,
+    PLANRELAY_ACCEPTANCE_CLAUDE: JSON.stringify(COMMAND), FAKE_CLAUDE_SCRIPT: JSON.stringify(script), FAKE_CLAUDE_LOG: logFile, ...extraEnv,
   };
   const r = spawnSync(process.execPath, [SCRIPT, ...args], { cwd: ROOT, env, encoding: 'utf8', timeout: 120_000 });
   const lines = r.stdout.replace(/after \d+ s/g, 'after N s').split('\n');
   return { status: r.status, stderr: r.stderr, lines, log: readLog(logFile), tmp };
 }
 
-const STAND_IN = 'AGENTBOARD_ACCEPTANCE_CLAUDE replaces the claude command: no real session starts.';
+const STAND_IN = 'PLANRELAY_ACCEPTANCE_CLAUDE replaces the claude command: no real session starts.';
 const SOLO_OK = [
   '  ok      tasks #1 and #2 were requested by the human and are Done with a summary',
   '  ok      #2 was claimed in the first session and completed by another, with no release in between (the claim was inherited)',
@@ -552,7 +552,7 @@ test('the script exits 1, names what each failed check found, and keeps the proj
     '',
   ]);
   assert.deepEqual([r.status, r.stderr], [1, '']);
-  assert.match(folder, /^agentboard-acceptance-/);
+  assert.match(folder, /^planrelay-acceptance-/);
   assert.deepEqual(fs.readdirSync(kept).sort(), ['first.jsonl', 'gitconfig', 'mcp.json', 'no-hooks', 'recipes-app', 'second.jsonl']);
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(kept, 'mcp.json'), 'utf8')), mcpConfigOf(ROOT));
   assert.equal(JSON.parse(fs.readFileSync(path.join(kept, 'first.jsonl'), 'utf8').split('\n')[0]).subtype, 'init');
@@ -620,9 +620,9 @@ test('the script refuses arguments it does not know, and a stand-in it cannot re
   assert.deepEqual([help.status, help.lines, help.log], [0, [USAGE.trimEnd(), ''], []]);
   // a stand-in that is not a JSON array, or is set but empty, is an error, never a reason to run the real command
   for (const standIn of ['node fake-claude.mjs', '']) {
-    const r = runScript(['solo'], GOOD, { AGENTBOARD_ACCEPTANCE_CLAUDE: standIn });
+    const r = runScript(['solo'], GOOD, { PLANRELAY_ACCEPTANCE_CLAUDE: standIn });
     assert.deepEqual(r.lines, [
-      '  FAILED  acceptance: AGENTBOARD_ACCEPTANCE_CLAUDE must be a JSON array of texts, such as ["node","test/fixtures/fake-claude.mjs"]',
+      '  FAILED  acceptance: PLANRELAY_ACCEPTANCE_CLAUDE must be a JSON array of texts, such as ["node","test/fixtures/fake-claude.mjs"]',
       'sessions: 0 of at most 5, total cost $0.0000',
       'verdict: FAILED (1 problem)',
       '',

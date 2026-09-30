@@ -4,8 +4,8 @@ import fs from 'node:fs';
 import { NAME, CONFIG_DIR } from '../src/name.js';
 
 test('name constants are the single rename point', () => {
-  assert.equal(NAME, 'agentboard');
-  assert.equal(CONFIG_DIR, '.agentboard');
+  assert.equal(NAME, 'planrelay');
+  assert.equal(CONFIG_DIR, '.planrelay');
 });
 
 test('package metadata uses the same name', () => {
