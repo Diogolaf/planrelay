@@ -4795,6 +4795,21 @@ Record anything unexpected as a task. Plan 3 runs the full acceptance script.
     - test helpers remove their temp folders on exit (prefix `agentboard-test-`).
 - **Carried over to plan 2 (dashboard):** `listTasks` refuses non-number filter values, so URL parameters such as `epic` must be converted to numbers first.
 - **Task 19 (done):** a real headless Claude Code run passed end to end: one agent completing a board task, a lock denying a second live session, and the MCP server following a live `/clear`. Two fixes came out of it. The pid falls back to the parent process, because Claude Code does not give the MCP server `CLAUDE_PID`. The brief and the skill say that "task" means a board task, because agents otherwise used the host's own `TaskCreate`.
+- **Final review (done):** after `/clear`, the server finds the new session behind a node launcher (folder rule when the session id names an ended agent) and stores its pid only from `CLAUDE_PID`; a session that replaces another is shown the updates it missed and every question still open to it; a two-worktree end-to-end test guards shared boards and cross-worktree locks.
+- **Carried over to plan 2 (dashboard), from the final review of plan 1:**
+  - Reuse as-is: `readState`, `readRegistry`, `readMessages`, `getTask` (blockers, blocks, children, stored names), `needsHuman`, `boardCounts`, `listTasks`, `readyQueue`, `epicProgress`, `epicPath`, `childrenIndex`, `COLUMNS`, `COLUMN_LABELS`, `activeCount`, `statusOf`, `claimReleaseAt`/`lastActivity`, `snippet`/`wasCut`.
+  - Data that does not exist yet:
+    - activity entries carry only the actor id; add `actorName` (a schema bump), because ended agents leave the registry after 7 days;
+    - `listTasks` items give the assignee's display name but no id; add `assigneeId` for avatar colors;
+    - `listTasks` caps at 200; the In progress and Blocked columns ("show everything") read `state.tasks` directly;
+    - the activity ring keeps 500 entries; "Full timeline · N events" needs a log scan or a per-task count;
+    - `readState` drops replay's count of malformed lines; §16's banner needs it (`replay(board).bad` or a count in the snapshot);
+    - `task.files` keeps only the first touch of each path and registry touches are pruned after 2 × `lockMinutes`, so the "Now" card's "last touched file" needs its own field.
+  - Behavior to decide:
+    - `statusOf` ignores dead pids, so a killed session shows as Idle until some write runs housekeeping; decide whether the dashboard checks pids on its own host;
+    - questions to `any` (the default `to`) ping nobody and are not in `needsHuman`; decide where they show (Needs you is the obvious place);
+    - outside git without an `.agentboard/` marker, starting the dashboard from a subfolder opens a different board; start from the project folder or add `--dir`;
+    - `agents.json` is rewritten on every hook call; debounce the file watcher.
 - **Carried over to plan 3, before the first push:**
   - The acceptance script runs headless sessions with `--strict-mcp-config` (or notes it), because `--setting-sources project,local` still loads the account's claude.ai connectors.
   - README requirements: Claude Code 2.1.139 or newer (hooks use exec form with `args`), and Node.js 22 or newer on PATH.
