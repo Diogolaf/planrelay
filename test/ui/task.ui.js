@@ -199,7 +199,7 @@ test('the timeline: "Showing the most recent N events" once the ring lost the st
   assert.equal(await shown.getAttribute('href'), `#/activity?task=${ID.vegetarian}`);
   timeline = { count: 0, truncated: true };
   await page.reload();
-  await shown.filter({ hasText: 'No recent events in the activity log' }).waitFor();
+  await shown.filter({ hasText: 'No recent events in the activity log.' }).waitFor();
   assert.equal(await shown.evaluate((el) => el.tagName), 'P');
   assert.equal(await page.getByTestId('links').getByRole('link').count(), 0);
 }));

@@ -234,7 +234,7 @@ function hostOf(href) {
 function links(t) {
   const { count = 0, truncated = false } = t.timeline ?? {};
   let timeline;
-  if (count === 0) timeline = h('p', { class: 'empty-note', 'data-testid': 'timeline' }, 'No recent events in the activity log');
+  if (count === 0) timeline = h('p', { class: 'empty-note', 'data-testid': 'timeline' }, 'No recent events in the activity log.');
   else {
     timeline = h('a', { class: 'side-link', href: `#/activity?task=${t.id}`, 'data-key': 'timeline', 'data-testid': 'timeline' },
       truncated ? `Showing the most recent ${plural(count, 'event')}` : `Full timeline · ${plural(count, 'event')}`);

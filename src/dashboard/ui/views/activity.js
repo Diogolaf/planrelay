@@ -1,5 +1,5 @@
 import { h } from '../dom.js';
-import { timeAgo } from '../format.js';
+import { plural, timeAgo } from '../format.js';
 
 /**
  * The Activity feed (spec section 13 Activity): the board's recent events, newest first, one row per
@@ -105,7 +105,7 @@ export function activity({ view, route, now }) {
 
   return h('div', { class: 'activity' },
     h('div', { class: 'activity-head', 'data-testid': 'activity-heading' }, head),
-    truncated && h('p', { class: 'page-note' }, `Showing the most recent ${rows.length} events`),
+    truncated && h('p', { class: 'page-note' }, `Showing the most recent ${plural(rows.length, 'event')}`),
     rows.length === 0
       ? h('p', { class: 'panel activity-empty', 'data-testid': 'activity-empty' },
         id == null ? 'Nothing has happened on the board yet.' : 'No recent events in the activity log.')
