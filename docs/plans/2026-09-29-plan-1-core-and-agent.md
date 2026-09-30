@@ -4794,7 +4794,9 @@ Record anything unexpected as a task. Plan 3 runs the full acceptance script.
     - system messages carry `authorName: 'system'`;
     - test helpers remove their temp folders on exit (prefix `agentboard-test-`).
 - **Carried over to plan 2 (dashboard):** `listTasks` refuses non-number filter values, so URL parameters such as `epic` must be converted to numbers first.
+- **Task 19 (done):** a real headless Claude Code run passed end to end: one agent completing a board task, a lock denying a second live session, and the MCP server following a live `/clear`. Two fixes came out of it. The pid falls back to the parent process, because Claude Code does not give the MCP server `CLAUDE_PID`. The brief and the skill say that "task" means a board task, because agents otherwise used the host's own `TaskCreate`.
 - **Carried over to plan 3, before the first push:**
+  - The acceptance script runs headless sessions with `--strict-mcp-config` (or notes it), because `--setting-sources project,local` still loads the account's claude.ai connectors.
   - README requirements: Claude Code 2.1.139 or newer (hooks use exec form with `args`), and Node.js 22 or newer on PATH.
   - The repository root `.mcp.json` is also offered as a project server to contributors who open this repository in Claude Code; it fails harmlessly because `${CLAUDE_PLUGIN_ROOT}` is not set there. Decide whether to move the plugin files or document it.
   - The skill maps "open the board" once the dashboard exists (plan 2).
