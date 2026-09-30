@@ -4,7 +4,7 @@ import { rulesPath } from '../core/config.js';
 import { lockConflict, recordTouch } from '../core/locks.js';
 import { inheritClaim, maintenance } from '../core/maintenance.js';
 import { claimedBy, syncChecklist, touchTaskFile } from '../core/ops.js';
-import { currentBranch, lockKey, toRepoPath } from '../core/paths.js';
+import { currentBranch, lockKey, samePath, toRepoPath } from '../core/paths.js';
 import { whatsNew } from '../core/queries.js';
 import { snippet } from '../core/reduce.js';
 import { logError, openBoard, readRegistry, readState, transact } from '../core/store.js';
@@ -17,6 +17,7 @@ import { formatBrief, formatPings, wrapBoardData } from './format.js';
  *
  * @typedef {import('../core/store.js').Board} Board
  * @typedef {import('../core/agents.js').Agent} Agent
+ * @typedef {import('./format.js').PingResult} PingResult
  * @typedef {{ board: Board, input: Record<string, any>, id: string, folder: string,
  *   env: Record<string, string | undefined>, host: string, now: number }} HookCall
  *   id: the session id; folder: the agent's folder, the worktree root (§6); host: currentHost()
@@ -71,10 +72,38 @@ function touch(h, reg, seq, extra = {}) {
 }
 
 /**
+ * The sessions a starting session replaces, whose updates since their own cursor it is shown (§9):
+ * the most recently ended agent of the same host process in the same folder (/clear: its
+ * SessionEnd, or this session's touch, ended it), and the gone holder of the claim it inherits
+ * (`events`; `state` is the board before them). Runs after touch. @param {HookCall} h
+ * @returns {{ id: string, cursor: number | undefined }[]}
+ */
+function replacedSessions(h, state, reg, events) {
+  const pid = hostPid(h.env);
+  const endedAt = (a) => (Number.isFinite(a.endedAt) ? a.endedAt : -Infinity);
+  const [same] = Object.entries(reg.agents)
+    .filter(([key, a]) => key !== h.id && a.endedAt != null && pid !== null && a.pid === pid && a.host === h.host)
+    .sort(([, x], [, y]) => endedAt(y) - endedAt(x));
+  const claim = events.find((e) => e.type === 'task.claimed');
+  const ids = [same && samePath(same[1].folder, h.folder) ? same[0] : null, claim ? state.tasks[claim.data.id]?.assignee : null];
+  return [...new Set(ids)].filter((x) => getAgent(reg, x)).map((x) => ({ id: x, cursor: reg.agents[x].cursor }));
+}
+
+/** Two ping lists as one, oldest first, each message once. @param {PingResult} a @param {PingResult} b @returns {PingResult} */
+function mergePings(a, b) {
+  const seen = new Set(a.items.map((p) => p.message.id));
+  const items = [...a.items, ...b.items.filter((p) => !seen.has(p.message.id))].sort((x, y) => x.message.seq - y.message.seq);
+  return { items, olderDropped: a.olderDropped || b.olderDropped };
+}
+
+/**
  * SessionStart: registers the agent, inherits a claim a gone agent left in this folder (§10) and
  * returns the brief. Only a new session inherits: an agent that was already registered and live
  * (SessionStart after a compaction keeps the session id) never does, whatever the `source`. Its
- * cursor ends after its own inheritance events, so it is never pinged about them. @param {HookCall} h
+ * cursor ends after its own inheritance events, so it is never pinged about them. The brief's
+ * updates also bring what the sessions it replaces had not been shown (replacedSessions), such
+ * as an answer or a question that came after their last prompt; its cursor is past those too, so
+ * its first prompt does not repeat them. @param {HookCall} h
  */
 function sessionStart(h) {
   const { board, id, folder } = h;
@@ -84,12 +113,17 @@ function sessionStart(h) {
     const fresh = !isSeq(known?.cursor);
     const agent = touch(h, reg, state.seq, { branch: currentBranch(board.gitDir) });
     const events = wasLive ? [] : inheritClaim(state, reg, id, folder);
+    const replaced = wasLive ? [] : replacedSessions(h, state, reg, events);
     // The events returned here take the next sequence numbers.
     const upTo = state.seq + events.length;
     if (fresh) agent.cursor = upTo; // a new agent starts after its own inheritance
     const since = advanceCursor(agent, upTo);
-    return { events, registry: reg, result: { reg, since, name: agent.name } };
+    return { events, registry: reg, result: { reg, since, name: agent.name, replaced } };
   }, writeOpts(h));
+  const pings = result.replaced.reduce(
+    (all, r) => mergePings(all, whatsNew(state, result.reg, r.id, { afterSeq: r.cursor })),
+    whatsNew(state, result.reg, id, { afterSeq: result.since }),
+  );
   const rules = rulesPath(board.configRoot);
   return contextOutput('SessionStart', formatBrief({
     agentName: result.name,
@@ -97,7 +131,7 @@ function sessionStart(h) {
     state,
     reg: result.reg,
     agentId: id,
-    pings: whatsNew(state, result.reg, id, { afterSeq: result.since }),
+    pings,
     maxPings: board.config.maxPings,
     rulesFile: fs.existsSync(rules) ? rules : null,
     configProblems: board.configProblems,

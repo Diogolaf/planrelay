@@ -101,6 +101,59 @@ test('/clear: the new session of the same host process continues the task and is
   assert.equal(hook(repo, 'UserPromptSubmit', 's3', { prompt: 'go on' }, T0 + 2 * MIN, same), '');
 });
 
+/** The id of the open question on task 1. */
+const openQuestion = (repo) => readState(openBoard(repo)).tasks[1].openQuestions[0].id;
+
+test('/clear: an answer that came after the last prompt reaches the new session in its brief, once', () => {
+  const repo = tempRepo();
+  hook(repo, 'SessionStart', 's1');
+  hook(repo, 'SessionStart', 's2');
+  claimOne(repo);
+  asAgent(repo, 's1', postMessage, { taskId: 1, kind: 'question', to: 'Jade', text: 'Is the CSV schema final?' });
+  hook(repo, 'UserPromptSubmit', 's1', { prompt: 'go on' }, T0 + MIN);
+  const q = openQuestion(repo);
+  asAgent(repo, 's2', postMessage, { taskId: 1, kind: 'answer', replyTo: q, text: 'Yes, final.' }, T0 + 2 * MIN);
+  const same = envOf('s1');
+  // the new session's SessionStart may arrive before the old one's SessionEnd
+  const text = context(hook(repo, 'SessionStart', 's3', { source: 'clear' }, T0 + 3 * MIN, same));
+  hook(repo, 'SessionEnd', 's1', { reason: 'clear' }, T0 + 3 * MIN, same);
+  assert.match(text, /Your task: #1 Filter by prep time/);
+  assert.match(text, new RegExp(`Updates since you were last here:\n#1 · Jade answered your question ${q} "Is the CSV schema final\\?": "Yes, final\\."`));
+  assert.equal(text.match(/answered your question/g).length, 1);
+  assert.equal(hook(repo, 'UserPromptSubmit', 's3', { prompt: 'go on' }, T0 + 4 * MIN, same), '');
+});
+
+test('/clear: a question that came after the last prompt reaches the new session, which can answer it', () => {
+  const repo = tempRepo();
+  hook(repo, 'SessionStart', 's1');
+  hook(repo, 'SessionStart', 's2');
+  claimOne(repo);
+  asAgent(repo, 's1', postMessage, { taskId: 1, kind: 'question', to: 'Jade', text: 'Is the CSV schema final?' });
+  const q = openQuestion(repo);
+  const jade = envOf('s2');
+  hook(repo, 'SessionEnd', 's2', { reason: 'clear' }, T0 + MIN, jade);
+  const text = context(hook(repo, 'SessionStart', 's4', { source: 'clear' }, T0 + MIN, jade));
+  assert.match(text, /you are agent Jade/);
+  assert.match(text, new RegExp(`\n#1 · Amber asks you: "Is the CSV schema final\\?" \\(answer with post_message kind "answer", replyTo "${q}"\\)`));
+  assert.equal(hook(repo, 'UserPromptSubmit', 's4', { prompt: 'hello' }, T0 + 2 * MIN, jade), '');
+  asAgent(repo, 's4', postMessage, { taskId: 1, kind: 'answer', replyTo: q, text: 'Yes, final.' }, T0 + 2 * MIN);
+  assert.deepEqual(readState(openBoard(repo)).tasks[1].openQuestions, []); // Amber's task is no longer blocked
+  assert.match(context(hook(repo, 'UserPromptSubmit', 's1', { prompt: 'go on' }, T0 + 3 * MIN)), /#1 · Jade answered your question/);
+});
+
+test('a killed terminal: the session that inherits its claim is told what was posted on the task since the dead session\'s last prompt', () => {
+  const repo = tempRepo();
+  hook(repo, 'SessionStart', 's2');
+  hook(repo, 'SessionStart', 's1', {}, T0, { CLAUDE_PID: String(DEAD_PID) });
+  claimOne(repo);
+  asAgent(repo, 's2', postMessage, { taskId: 1, kind: 'comment', text: 'Heads up: the recipes API now pages its results.' }, T0 + MIN);
+  // no SessionEnd ever came, and s1's host process is gone
+  const text = context(hook(repo, 'SessionStart', 's3', {}, T0 + 2 * MIN));
+  assert.match(text, /Your task: #1 Filter by prep time/);
+  assert.match(text, /Updates since you were last here:\n#1 · Amber \(comment\): "Heads up: the recipes API now pages its results\."/);
+  assert.equal(hook(repo, 'UserPromptSubmit', 's3', { prompt: 'go on' }, T0 + 3 * MIN), '');
+});
+
 test('a killed terminal: a new session in the same folder takes over the dead session\'s claim', () => {
   const repo = tempRepo();
   hook(repo, 'SessionStart', 's1', {}, T0, { CLAUDE_PID: String(DEAD_PID) });
