@@ -401,13 +401,60 @@ export function mcpServer(board, who) {
   });
 }
 
+/** A failure's message on one line, without a stack, cut to `max` characters. */
+function oneLine(err, max = 300) {
+  const text = String(/** @type {any} */ (err)?.message ?? err).replace(/\s+/g, ' ').trim();
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
+/**
+ * The server when the board could not be opened: it still starts and lists the nine tools, and
+ * every call answers with the reason and what to do, so the session goes on without the board.
+ * @param {string} folder @param {unknown} err
+ */
+function unavailableServer(folder, err) {
+  const why = `The ${NAME} board could not be opened for ${folder}: ${oneLine(err)}.`;
+  const text = `${why} The board tools do not work in this session. Tell the human what failed; once it is fixed, ` +
+    `they can reconnect the ${NAME} server with /mcp or start a new session.`;
+  // the schemas do not depend on the board: only the handlers, which are replaced, use it
+  const tools = buildTools(/** @type {any} */ (null), { folder }).map((t) => ({
+    ...t,
+    handler: () => {
+      throw new BoardError(text);
+    },
+  }));
+  return createHandler({
+    name: NAME,
+    version: VERSION,
+    instructions: `${INSTRUCTIONS} In this session the board could not be opened; every tool says why.`,
+    tools,
+  });
+}
+
 /**
  * Entry point for `agentboard mcp`: serves the board of the session's project over stdio until
  * the client closes its input. Identity comes from CLAUDE_CODE_SESSION_ID and CLAUDE_PID (§4).
- * @param {{ env?: Record<string, string | undefined>, cwd?: string }} [opts]
+ * It never fails at startup: when the board cannot be opened, the server still answers, and
+ * every tool says why (unavailableServer); the reason also goes to stderr, the host's MCP log.
+ * @param {{ env?: Record<string, string | undefined>, cwd?: string, input?: NodeJS.ReadableStream,
+ *   output?: NodeJS.WritableStream, stderr?: NodeJS.WritableStream, open?: typeof openBoard }} [opts]
+ *   input, output, stderr: the process's own by default; open: openBoard (tests replace it)
  */
-export function startMcpServer({ env = process.env, cwd = process.cwd() } = {}) {
-  const board = openBoard(env.CLAUDE_PROJECT_DIR || cwd, { projectDir: env.CLAUDE_PROJECT_DIR, env });
+export function startMcpServer({
+  env = process.env, cwd = process.cwd(), input = process.stdin, output = process.stdout, stderr = process.stderr, open = openBoard,
+} = {}) {
+  const folder = env.CLAUDE_PROJECT_DIR || cwd;
+  let board;
+  try {
+    board = open(folder, { projectDir: env.CLAUDE_PROJECT_DIR, env });
+  } catch (err) {
+    try {
+      stderr.write(`${NAME}: the board could not be opened for ${folder}: ${oneLine(err)}\n`);
+    } catch {
+      // nowhere left to report; the tools still say why
+    }
+    return serveStdio(unavailableServer(folder, err), { input, output });
+  }
   const pid = Number(env.CLAUDE_PID);
   const who = {
     sessionId: env.CLAUDE_CODE_SESSION_ID || null,
@@ -415,5 +462,5 @@ export function startMcpServer({ env = process.env, cwd = process.cwd() } = {}) 
     folder: board.repoRoot,
     host: currentHost(env),
   };
-  return serveStdio(mcpServer(board, who), { onError: (err, context) => logError(board, `mcp ${context}`, err) });
+  return serveStdio(mcpServer(board, who), { input, output, onError: (err, context) => logError(board, `mcp ${context}`, err) });
 }

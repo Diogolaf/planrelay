@@ -22,7 +22,8 @@ import { formatBrief, formatPings, wrapBoardData } from './format.js';
  *   id: the session id; folder: the agent's folder, the worktree root (§6); host: currentHost()
  */
 
-const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
+/** The file-editing tools the lock and the file record apply to (hooks/hooks.json matches them). */
+export const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 /** Hooks never wait long for the board lock: on contention they give up and fail open. */
 const HOOK_LOCK_TIMEOUT_MS = 2000;
 

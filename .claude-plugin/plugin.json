@@ -1,0 +1,8 @@
+{
+  "name": "agentboard",
+  "version": "0.1.0",
+  "description": "A local task board for AI coding agents: create, claim, discuss and hand off tasks across sessions.",
+  "author": { "name": "agentboard contributors" },
+  "license": "MIT",
+  "keywords": ["tasks", "board", "handoff", "agents", "mcp"]
+}

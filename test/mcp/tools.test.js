@@ -1,8 +1,9 @@
 import { test } from 'node:test';
+import { PassThrough } from 'node:stream';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { buildTools, mcpServer } from '../../src/mcp/tools.js';
+import { buildTools, mcpServer, startMcpServer } from '../../src/mcp/tools.js';
 import { currentHost } from '../../src/core/agents.js';
 import { systemMessage } from '../../src/core/maintenance.js';
 import { openBoard, readRegistry, readState, transact } from '../../src/core/store.js';
@@ -280,4 +281,40 @@ test('the server answers the protocol; tool errors are results, internal ones ar
   assert.equal(broken.content[0].text, 'Internal error in agentboard. Try again; if it keeps failing, tell the human.');
   assert.match(fs.readFileSync(path.join(repo, '.git', 'agentboard', 'errors.log'), 'utf8'), /tool create_task: Error: EISDIR/);
   assert.deepEqual(handle({ jsonrpc: '2.0', id: 5, method: 'ping' }).result, {}); // the server goes on
+});
+
+test('the server starts when the board cannot be opened, and every tool says why and what to do', async () => {
+  const input = new PassThrough();
+  const output = new PassThrough();
+  const stderr = new PassThrough();
+  const lines = [];
+  output.on('data', (c) => lines.push(...c.toString().split('\n').filter(Boolean).map((l) => JSON.parse(l))));
+  let logged = '';
+  stderr.on('data', (c) => { logged += c.toString(); });
+  const open = () => {
+    throw new Error("EACCES: permission denied, mkdir '/srv/recipes/.git/agentboard'");
+  };
+  startMcpServer({ env: { CLAUDE_PROJECT_DIR: '/srv/recipes' }, input, output, stderr, open });
+  const send = (m) => input.write(`${JSON.stringify(m)}\n`);
+  send({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18' } });
+  send({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
+  const names = ['whats_new', 'list_tasks', 'get_task', 'create_task', 'update_task', 'claim_task', 'post_message', 'complete_task', 'release_task'];
+  names.forEach((name, i) => send({ jsonrpc: '2.0', id: 10 + i, method: 'tools/call', params: { name, arguments: {} } }));
+  const start = Date.now();
+  while (lines.length < 2 + names.length) {
+    if (Date.now() - start > 5000) throw new Error('timed out');
+    await new Promise((r) => setTimeout(r, 10));
+  }
+  input.end();
+  const byId = (id) => lines.find((l) => l.id === id);
+  assert.equal(byId(1).result.serverInfo.name, 'agentboard');
+  assert.match(byId(1).result.instructions, /could not be opened/);
+  assert.deepEqual(byId(2).result.tools.map((t) => t.name), names);
+  for (const [i, name] of names.entries()) {
+    const r = byId(10 + i).result;
+    assert.equal(r.isError, true, name);
+    assert.match(r.content[0].text, /^The agentboard board could not be opened for \/srv\/recipes: EACCES: permission denied, mkdir '\/srv\/recipes\/\.git\/agentboard'\. /, name);
+    assert.match(r.content[0].text, /Tell the human[\s\S]*\/mcp/, name);
+  }
+  assert.match(logged, /^agentboard: the board could not be opened for \/srv\/recipes: EACCES/);
 });
