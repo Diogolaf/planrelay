@@ -149,9 +149,10 @@ test('a ping whose text was cut says where the full text is, when get_task shows
   assert.ok(formatPing({ reason: 'question', message: msg({ kind: 'question', text: long }), authorName: 'Jade' }).endsWith(hint));
   assert.ok(formatPing({ reason: 'update', message: msg({ text: long, relayedFromHuman: true }), authorName: 'Jade' }).endsWith(hint));
   assert.ok(formatPing({ reason: 'update', message: msg({ kind: 'handoff', text: long }), authorName: 'Jade' }).endsWith(hint));
-  // get_task shows comments as snippets too, so there is nowhere to point; short texts were never cut
-  assert.ok(!formatPing({ reason: 'update', message: msg({ text: long }), authorName: 'Jade' }).includes('full text'));
-  assert.ok(!formatPing({ reason: 'mention', message: msg({ text: long }), authorName: 'Jade' }).includes('full text'));
+  assert.ok(formatPing({ reason: 'update', message: msg({ text: long }), authorName: 'Jade' }).endsWith(hint));
+  assert.ok(formatPing({ reason: 'mention', message: msg({ text: long }), authorName: 'Jade' }).endsWith(hint));
+  // get_task shows system notes as snippets too, so there is nowhere to point; short texts were never cut
+  assert.ok(!formatPing({ reason: 'update', message: msg({ kind: 'system', text: long }), authorName: 'system' }).includes('full text'));
   assert.ok(!formatPing({ reason: 'answer', message: msg({ kind: 'answer', replyTo: 'm4', text: 'Yes' }), authorName: 'Jade', question: 'Units?' }).includes('full text'));
 });
 

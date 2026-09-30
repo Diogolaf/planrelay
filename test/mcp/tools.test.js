@@ -133,7 +133,7 @@ test('post_message replies with the new message id; the human\'s words read "rel
   assert.match(a.call('whats_new'), new RegExp(`#1 · the human answered your question ${qid} "Include oven time\\?" \\(relayed by Jade\\): "Yes, include it\\."`));
 });
 
-test('get_task: stored names, the last 20 messages; the latest handoff, questions and answers in full, comments as snippets', () => {
+test('get_task: stored names, the last 20 messages; the latest handoff, comments, questions and answers in full, system notes as snippets', () => {
   const repo = tempRepo();
   fs.mkdirSync(path.join(repo, '.agentboard'));
   fs.writeFileSync(path.join(repo, '.agentboard', 'config.json'), '{ "claimTimeoutHours": 8760 }');
@@ -144,7 +144,8 @@ test('get_task: stored names, the last 20 messages; the latest handoff, question
   a.call('claim_task', { id: 1 });
   a.call('release_task', { id: 1, note: `Stopped at the API.\nNext step: ${'z'.repeat(500)} then the UI.` });
   b.call('claim_task', { id: 1 });
-  for (let i = 1; i <= 17; i++) b.call('post_message', { taskId: 1, text: `Note ${i}` });
+  for (let i = 1; i <= 16; i++) b.call('post_message', { taskId: 1, text: `Note ${i}` });
+  transact(openBoard(repo), () => ({ events: [systemMessage(1, `Automatic note ${'s'.repeat(400)}`)] }), { now: T0 });
   const qid = /(m\d+)/.exec(b.call('post_message', { taskId: 1, kind: 'question', to: 'human', text: `Minutes or hours? ${'q'.repeat(400)}` }))[1];
   b.call('post_message', { taskId: 1, text: `Long ${'y'.repeat(400)}` });
   b.call('post_message', { taskId: 1, kind: 'answer', replyTo: qid, relayedFromHuman: true, text: `Minutes. ${'w'.repeat(2500)}` });
@@ -159,7 +160,8 @@ test('get_task: stored names, the last 20 messages; the latest handoff, question
   // older than the last 20 messages, and still in full, its lines indented under it
   assert.match(text, /\nLatest handoff \(m\d+, Amber\): Stopped at the API\.\n {2}Next step: z{500} then the UI\.\nConversation \(21 messages, last 20 shown\):\n/);
   assert.match(text, new RegExp(`\\n- ${qid} Jade · question to the human · 2026-01-01 12:00 UTC: Minutes or hours\\? q{400}\\n`));
-  assert.match(text, /\n- m\d+ Jade · comment · 2026-01-01 12:00 UTC: Long y{270,280}…\n/);
+  assert.match(text, /\n- m\d+ Jade · comment · 2026-01-01 12:00 UTC: Long y{400}\n/); // where agents record decisions
+  assert.match(text, /\n- m\d+ system · 2026-01-01 12:00 UTC: Automatic note s{250,280}…\n/);
   // at most 2,000 characters even in full
   const answer = new RegExp(`\\n- m\\d+ the human \\(relayed by Jade\\) · answer to ${qid} · 2026-01-01 12:00 UTC: (Minutes\\. w+…)\\n</agentboard-data>$`).exec(text);
   assert.equal(answer[1].length, 2000);

@@ -19,11 +19,11 @@ export const MAX_BRIEF_LINES = 15;
 
 const DROPPED = "Some older updates fell out of the ping window; get_task shows a task's latest messages.";
 /**
- * Message kinds whose text get_task shows in full (mcp/tools.js describe): questions and answers
- * among the latest messages, and the task's latest handoff or summary; the human's relayed words too.
- * Comments and system notes are shown there as snippets, as in the pings.
+ * Message kinds whose text get_task shows in full (mcp/tools.js describe): comments, questions and
+ * answers among the latest messages, and the task's latest handoff or summary; the human's relayed
+ * words too. System notes are shown there as snippets, as in the pings.
  */
-const FULL_IN_GET_TASK = new Set(['question', 'answer', 'handoff', 'summary']);
+const FULL_IN_GET_TASK = new Set(['comment', 'question', 'answer', 'handoff', 'summary']);
 const fullTextHint = (taskId) => ` (get_task #${taskId} has the full text)`;
 
 /** Fences board-originated text as data (§9). Any spelling of the closing tag is defused. */

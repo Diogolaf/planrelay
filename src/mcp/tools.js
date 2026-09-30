@@ -117,14 +117,14 @@ function messageLine(m, who, full) {
  * get_task's view (§8) as lines of board data, from getTask with the task's message file: its
  * stored names, the definition of done in full, and at most the last MESSAGES_SHOWN messages. The
  * texts the next agent must not lose are shown in full (fullText): the latest handoff or summary,
- * even when older than those messages, and every question, answer and relayed word of the human
- * among them. Comments, system notes and older notes are snippets, like the pings
- * (hooks/format.js FULL_IN_GET_TASK follows this rule).
+ * even when older than those messages, and every comment (where agents record decisions),
+ * question, answer and relayed word of the human among them. System notes and older handoffs are
+ * snippets, like the pings (hooks/format.js FULL_IN_GET_TASK follows this rule).
  * @param {NonNullable<ReturnType<typeof getTask>>} t @param {Registry} reg @param {string | null} me the reader
  */
 function describe(t, reg, me) {
   const note = t.messages.findLast((m) => m.kind === 'handoff' || m.kind === 'summary');
-  const inFull = (m) => m === note || m.kind === 'question' || m.kind === 'answer' || m.relayedFromHuman === true;
+  const inFull = (m) => m === note || ['comment', 'question', 'answer'].includes(m.kind) || m.relayedFromHuman === true;
   const textOf = (id, fallback) => t.messages.find((m) => m.id === id)?.text ?? fallback;
   const who = (to) => recipient(reg, to, me);
   const lines = [];
