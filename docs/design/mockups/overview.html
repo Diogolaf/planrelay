@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Option A — Overview first</title>
+</head>
+<body>
+
+
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap">
+<style>
+body{margin:0;font-family:'Instrument Sans',system-ui,sans-serif;color:#1D1C1A;background:#F4F3EF}
+a{color:#2B55C8}a:hover{color:#1E3F9A}
+</style>
+
+<div style="width: 1440px; height: 900px; box-sizing: border-box; display: flex; flex-direction: column; background: #F4F3EF; color: #1D1C1A; font-family: 'Instrument Sans', system-ui, sans-serif">
+
+<header style="height: 56px; flex-shrink: 0; box-sizing: border-box; display: flex; align-items: center; gap: 20px; padding: 0 24px; background: #FFFFFF; border-bottom: 1px solid #E3E1DA">
+<div style="display: flex; align-items: center; gap: 10px">
+<svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true"><rect x="1" y="1" width="9" height="9" rx="2" fill="#2B55C8"></rect><rect x="12" y="1" width="9" height="9" rx="2" fill="#1D1C1A"></rect><rect x="1" y="12" width="9" height="9" rx="2" fill="#1D1C1A"></rect><rect x="12" y="12" width="9" height="9" rx="2" fill="#C9C5BB"></rect></svg>
+<span style="font-weight: 700; font-size: 16px">[NAME]</span>
+<span style="color: #5F5C55; font-size: 15px">/</span>
+<span style="font-weight: 600; font-size: 15px">recipes-app</span>
+</div>
+<nav aria-label="Sections" style="display: flex; gap: 4px; margin-left: 16px">
+<a href="#" style="padding: 8px 12px; border-radius: 8px; font-size: 14px; font-weight: 600; text-decoration: none; background: #E8EEFB; color: #2B4FB3">Overview</a>
+<a href="#" style="padding: 8px 12px; border-radius: 8px; font-size: 14px; font-weight: 500; text-decoration: none; color: #4F4C46">Board</a>
+<a href="#" style="padding: 8px 12px; border-radius: 8px; font-size: 14px; font-weight: 500; text-decoration: none; color: #4F4C46">List</a>
+<a href="#" style="padding: 8px 12px; border-radius: 8px; font-size: 14px; font-weight: 500; text-decoration: none; color: #4F4C46">Activity</a>
+</nav>
+<div style="flex-grow: 1"></div>
+<label style="display: flex; align-items: center; gap: 8px; width: 320px; height: 36px; box-sizing: border-box; padding: 0 12px; border: 1px solid #E3E1DA; border-radius: 8px; background: #FAF9F6">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#5F5C55" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M20 20l-3.5-3.5"></path></svg>
+<input type="search" aria-label="Search" placeholder="Search tasks, #id or epic" style="border: 0; outline: none; background: transparent; font: inherit; font-size: 14px; flex-grow: 1; color: #1D1C1A">
+</label>
+<div style="display: flex; align-items: center; gap: 8px; font-size: 13px; color: #4F4C46">
+<span style="width: 8px; height: 8px; border-radius: 4px; background: #2F8A55"></span>
+<span>3 agents active · live</span>
+</div>
+</header>
+
+<main style="flex-grow: 1; min-height: 0; box-sizing: border-box; padding: 24px; display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 24px">
+
+<div style="grid-column: span 8; display: flex; flex-direction: column; gap: 22px; min-width: 0">
+
+<section style="background: #FFFFFF; border: 1px solid #E3E1DA; border-radius: 12px; padding: 18px 22px 6px; display: flex; flex-direction: column">
+<div style="display: flex; align-items: center; gap: 10px; padding-bottom: 12px">
+<h2 style="margin: 0; font-size: 17px; font-weight: 700">Needs you</h2>
+<span style="min-width: 22px; height: 22px; padding: 0 7px; box-sizing: border-box; border-radius: 11px; background: #FCEBD9; color: #8F4306; font-size: 13px; font-weight: 700; display: flex; align-items: center; justify-content: center">3</span>
+<span style="margin-left: auto; font-size: 13px; color: #5F5C55">The dashboard only shows. To act, ask any agent.</span>
+</div>
+<sc-for list="{{needs}}" as="n" hint-placeholder-count="3">
+<div style="display: flex; align-items: center; gap: 16px; padding: 14px 0; border-top: 1px solid #EFEDE7">
+<span style="width: 78px; flex-shrink: 0; text-align: center; padding: 4px 0; border-radius: 6px; font-size: 11.5px; font-weight: 700; letter-spacing: 0.04em; {{n.kindStyle}}">{{n.kind}}</span>
+<div style="flex-grow: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px">
+<div style="font-size: 15px; font-weight: 600">{{n.title}}</div>
+<div style="font-size: 14px; color: #5F5C55">{{n.detail}}</div>
+</div>
+<div style="flex-shrink: 0; display: flex; align-items: center; gap: 8px; padding: 5px 5px 5px 12px; background: #F4F3EF; border-radius: 8px">
+<span style="font-size: 13px; color: #5F5C55">Ask:</span>
+<span style="font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 12.5px; color: #1D1C1A">{{n.ask}}</span>
+<button type="button" aria-label="Copy request" style="width: 34px; height: 34px; border: 1px solid #E3E1DA; border-radius: 6px; background: #FFFFFF; color: #4F4C46; display: flex; align-items: center; justify-content: center; cursor: pointer; padding: 0"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h10"></path></svg></button>
+</div>
+</div>
+</sc-for>
+</section>
+
+<section style="display: flex; flex-direction: column; gap: 12px">
+<div style="display: flex; align-items: baseline; gap: 10px">
+<h2 style="margin: 0; font-size: 17px; font-weight: 700">Now</h2>
+<span style="font-size: 13px; color: #5F5C55">who is doing what</span>
+</div>
+<div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px">
+<sc-for list="{{agents}}" as="a" hint-placeholder-count="3">
+<article style="background: #FFFFFF; border: 1px solid #E3E1DA; border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 11px; min-width: 0">
+<div style="display: flex; align-items: center; gap: 10px">
+<span style="width: 30px; height: 30px; flex-shrink: 0; border-radius: 15px; background: {{a.color}}; color: #FFFFFF; font-weight: 700; font-size: 14px; display: flex; align-items: center; justify-content: center">{{a.initial}}</span>
+<span style="font-weight: 600; font-size: 15px">{{a.name}}</span>
+<span style="margin-left: auto; padding: 3px 8px; border-radius: 6px; font-size: 12px; font-weight: 600; {{a.pillStyle}}">{{a.status}}</span>
+</div>
+<a href="#" style="font-size: 14px; font-weight: 600; color: #1D1C1A; text-decoration: none; line-height: 1.35"><span style="font-family: 'JetBrains Mono', ui-monospace, monospace; color: #5F5C55; font-weight: 500">{{a.id}}</span> {{a.task}}</a>
+<div style="display: flex; align-items: center; gap: 8px">
+<div style="flex-grow: 1; height: 6px; border-radius: 3px; background: #ECEAE4; overflow: hidden"><div style="height: 6px; width: {{a.pct}}; background: {{a.color}}"></div></div>
+<span style="font-size: 12px; color: #5F5C55">checklist {{a.check}}</span>
+</div>
+<div style="font-size: 12.5px; color: #5F5C55; display: flex; justify-content: space-between; gap: 8px">
+<sc-if value="{{a.blocked}}" hint-placeholder-val="{{ false }}"><span style="color: #8F4306; font-weight: 600">Waiting for your answer</span></sc-if>
+<sc-if value="{{a.working}}" hint-placeholder-val="{{ true }}"><span style="font-family: 'JetBrains Mono', ui-monospace, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{a.file}}</span></sc-if>
+<span style="flex-shrink: 0">{{a.when}}</span>
+</div>
+</article>
+</sc-for>
+</div>
+</section>
+
+<section style="background: #FFFFFF; border: 1px solid #E3E1DA; border-radius: 12px; padding: 18px 22px 6px">
+<div style="display: flex; align-items: baseline; gap: 10px; padding-bottom: 10px">
+<h2 style="margin: 0; font-size: 17px; font-weight: 700">Shipped today</h2>
+<span style="font-size: 13px; color: #5F5C55">the summary each agent left when it finished</span>
+</div>
+<sc-for list="{{shipped}}" as="s" hint-placeholder-count="2">
+<div style="display: flex; gap: 14px; padding: 12px 0; border-top: 1px solid #EFEDE7">
+<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#2F6B45" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex-shrink: 0; margin-top: 1px"><circle cx="12" cy="12" r="9"></circle><path d="M8 12.5l2.8 2.8L16.5 9.5"></path></svg>
+<div style="display: flex; flex-direction: column; gap: 3px; min-width: 0">
+<div style="font-size: 14px; font-weight: 600"><span style="font-family: 'JetBrains Mono', ui-monospace, monospace; color: #5F5C55; font-weight: 500">{{s.id}}</span> {{s.title}} <span style="font-weight: 400; color: #5F5C55">· {{s.by}} · {{s.when}}</span></div>
+<div style="font-size: 13.5px; color: #4F4C46; line-height: 1.45">{{s.summary}}</div>
+</div>
+</div>
+</sc-for>
+</section>
+
+</div>
+
+<div style="grid-column: span 4; display: flex; flex-direction: column; gap: 22px; min-width: 0">
+
+<section style="background: #FFFFFF; border: 1px solid #E3E1DA; border-radius: 12px; padding: 18px 20px; display: flex; flex-direction: column; gap: 14px">
+<div style="display: flex; align-items: baseline; justify-content: space-between">
+<h2 style="margin: 0; font-size: 17px; font-weight: 700">Epics</h2>
+<a href="#" style="font-size: 13px; font-weight: 600">See all</a>
+</div>
+<sc-for list="{{epics}}" as="e" hint-placeholder-count="4">
+<div style="display: flex; flex-direction: column; gap: 6px; padding-left: {{e.indent}}">
+<div style="display: flex; align-items: center; gap: 8px; font-size: 14px">
+<span style="font-weight: {{e.weight}}">{{e.name}}</span>
+<sc-if value="{{e.sub}}" hint-placeholder-val="{{ false }}"><span style="padding: 1px 6px; border-radius: 4px; background: #ECEAE4; color: #4F4C46; font-size: 11px; font-weight: 600">sub-epic</span></sc-if>
+<span style="margin-left: auto; color: #5F5C55; font-size: 13px">{{e.count}}</span>
+</div>
+<div style="height: 8px; border-radius: 4px; background: #ECEAE4; overflow: hidden"><div style="height: 8px; width: {{e.pct}}; background: #2F6B45; border-radius: 4px"></div></div>
+</div>
+</sc-for>
+</section>
+
+<section style="background: #FFFFFF; border: 1px solid #E3E1DA; border-radius: 12px; padding: 18px 20px; display: flex; flex-direction: column; gap: 14px">
+<h2 style="margin: 0; font-size: 17px; font-weight: 700">Where the work is</h2>
+<div style="display: flex; height: 12px; border-radius: 6px; overflow: hidden; gap: 2px">
+<sc-for list="{{cols}}" as="c" hint-placeholder-count="5"><div style="flex-grow: {{c.n}}; background: {{c.color}}"></div></sc-for>
+</div>
+<div style="display: flex; flex-direction: column; gap: 8px">
+<sc-for list="{{cols}}" as="c" hint-placeholder-count="5">
+<div style="display: flex; align-items: center; gap: 10px; font-size: 14px">
+<span style="width: 10px; height: 10px; border-radius: 3px; background: {{c.color}}"></span>
+<span>{{c.name}}</span>
+<span style="margin-left: auto; font-weight: 600">{{c.n}}</span>
+</div>
+</sc-for>
+</div>
+</section>
+
+<section style="background: #FFFFFF; border: 1px solid #E3E1DA; border-radius: 12px; padding: 18px 20px 8px; display: flex; flex-direction: column">
+<h2 style="margin: 0; font-size: 17px; font-weight: 700">Next in line</h2>
+<span style="font-size: 13px; color: #5F5C55; padding: 4px 0 10px">the next free agent takes the first one</span>
+<sc-for list="{{next}}" as="t" hint-placeholder-count="3">
+<div style="display: flex; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid #EFEDE7">
+<span style="width: 24px; height: 24px; flex-shrink: 0; border-radius: 12px; background: #DDF1EE; color: #0B5F58; font-size: 12px; font-weight: 700; display: flex; align-items: center; justify-content: center">{{t.rank}}</span>
+<div style="display: flex; flex-direction: column; gap: 2px; min-width: 0">
+<span style="font-size: 14px; font-weight: 600"><span style="font-family: 'JetBrains Mono', ui-monospace, monospace; color: #5F5C55; font-weight: 500">{{t.id}}</span> {{t.title}}</span>
+<span style="font-size: 12.5px; color: #5F5C55">{{t.epic}}</span>
+</div>
+</div>
+</sc-for>
+</section>
+
+</div>
+</main>
+</div>
+
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const pill = {
+      progress: 'background: #E8EEFB; color: #2B4FB3',
+      blocked: 'background: #FCEBD9; color: #8F4306',
+      backlog: 'background: #ECEAE4; color: #4F4C46'
+    };
+    return {
+      needs: [
+        { kind: 'QUESTION', kindStyle: pill.blocked, title: '#14 Filter by prep time', detail: 'Jade asks: does prep time include oven time?', ask: 'answer #14: …' },
+        { kind: 'APPROVE', kindStyle: pill.progress, title: '4 tasks suggested by agents', detail: 'Created during work, waiting in Backlog: #21, #25, #26, #27', ask: 'approve #21 and #25' },
+        { kind: 'STALLED', kindStyle: pill.backlog, title: '#9 Sign-up screen', detail: 'No agent for 20 h. Goes back to Ready on its own in 4 h.', ask: 'resume #9' }
+      ],
+      agents: [
+        { name: 'Amber', initial: 'A', color: '#A45F00', status: 'In progress', pillStyle: pill.progress, id: '#12', task: 'Sign in with Google', pct: '60%', check: '3/5', blocked: false, working: true, file: 'src/auth/google.ts', when: '2 min ago' },
+        { name: 'Jade', initial: 'J', color: '#17735A', status: 'Blocked', pillStyle: pill.blocked, id: '#14', task: 'Filter by prep time', pct: '50%', check: '2/4', blocked: true, working: false, file: '', when: '11 min ago' },
+        { name: 'Cobalt', initial: 'C', color: '#2F4DB5', status: 'In progress', pillStyle: pill.progress, id: '#18', task: 'Offline shopping list', pct: '17%', check: '1/6', blocked: false, working: true, file: 'src/shopping/sync.ts', when: '30 s ago' }
+      ],
+      shipped: [
+        { id: '#7', title: 'Search by ingredient', by: 'Amber', when: '1 h ago', summary: 'Search by one or more ingredients, with unit tests. Left out: sort by relevance (suggested as #21).' },
+        { id: '#5', title: 'Recipe model in the database', by: 'Cobalt', when: '3 h ago', summary: 'Recipes table and migration. Verified by running the integration tests.' }
+      ],
+      epics: [
+        { name: 'Accounts & sign-in', count: '6/9', pct: '67%', indent: '0px', weight: '600', sub: false },
+        { name: 'Recipe search', count: '8/15', pct: '53%', indent: '0px', weight: '600', sub: false },
+        { name: 'Filters', count: '2/6', pct: '33%', indent: '18px', weight: '500', sub: true },
+        { name: 'Shopping list', count: '1/7', pct: '14%', indent: '0px', weight: '600', sub: false }
+      ],
+      cols: [
+        { name: 'Backlog', n: 18, color: '#8A867D' },
+        { name: 'Ready', n: 7, color: '#0F766E' },
+        { name: 'In progress', n: 3, color: '#2B55C8' },
+        { name: 'Blocked', n: 2, color: '#B45309' },
+        { name: 'Done', n: 41, color: '#2F6B45' }
+      ],
+      next: [
+        { rank: '1', id: '#19', title: 'Password reset by email', epic: 'Accounts & sign-in' },
+        { rank: '2', id: '#20', title: 'Vegetarian filter', epic: 'Recipe search › Filters' },
+        { rank: '3', id: '#23', title: 'Share list by link', epic: 'Shopping list' }
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>

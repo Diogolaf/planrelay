@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Option B — Jira-style board</title>
+</head>
+<body>
+
+
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap">
+<style>
+body{margin:0;font-family:'Instrument Sans',system-ui,sans-serif;color:#1D1C1A;background:#F4F3EF}
+a{color:#2B55C8}a:hover{color:#1E3F9A}
+</style>
+
+<div style="width: 1440px; height: 900px; box-sizing: border-box; display: flex; flex-direction: column; background: #F4F3EF; color: #1D1C1A; font-family: 'Instrument Sans', system-ui, sans-serif">
+
+<header style="height: 56px; flex-shrink: 0; box-sizing: border-box; display: flex; align-items: center; gap: 20px; padding: 0 24px; background: #FFFFFF; border-bottom: 1px solid #E3E1DA">
+<div style="display: flex; align-items: center; gap: 10px">
+<svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true"><rect x="1" y="1" width="9" height="9" rx="2" fill="#2B55C8"></rect><rect x="12" y="1" width="9" height="9" rx="2" fill="#1D1C1A"></rect><rect x="1" y="12" width="9" height="9" rx="2" fill="#1D1C1A"></rect><rect x="12" y="12" width="9" height="9" rx="2" fill="#C9C5BB"></rect></svg>
+<span style="font-weight: 700; font-size: 16px">[NAME]</span>
+<span style="color: #5F5C55; font-size: 15px">/</span>
+<span style="font-weight: 600; font-size: 15px">recipes-app</span>
+</div>
+<nav aria-label="Sections" style="display: flex; gap: 4px; margin-left: 16px">
+<a href="#" style="padding: 8px 12px; border-radius: 8px; font-size: 14px; font-weight: 500; text-decoration: none; color: #4F4C46">Overview</a>
+<a href="#" style="padding: 8px 12px; border-radius: 8px; font-size: 14px; font-weight: 600; text-decoration: none; background: #E8EEFB; color: #2B4FB3">Board</a>
+<a href="#" style="padding: 8px 12px; border-radius: 8px; font-size: 14px; font-weight: 500; text-decoration: none; color: #4F4C46">List</a>
+<a href="#" style="padding: 8px 12px; border-radius: 8px; font-size: 14px; font-weight: 500; text-decoration: none; color: #4F4C46">Activity</a>
+</nav>
+<div style="flex-grow: 1"></div>
+<label style="display: flex; align-items: center; gap: 8px; width: 320px; height: 36px; box-sizing: border-box; padding: 0 12px; border: 1px solid #E3E1DA; border-radius: 8px; background: #FAF9F6">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#5F5C55" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M20 20l-3.5-3.5"></path></svg>
+<input type="search" aria-label="Search" placeholder="Search tasks, #id or epic" style="border: 0; outline: none; background: transparent; font: inherit; font-size: 14px; flex-grow: 1; color: #1D1C1A">
+</label>
+<div style="display: flex; align-items: center; gap: 8px; font-size: 13px; color: #4F4C46">
+<span style="width: 8px; height: 8px; border-radius: 4px; background: #2F8A55"></span>
+<span>3 agents active · live</span>
+</div>
+</header>
+
+<div style="flex-grow: 1; min-height: 0; display: flex">
+
+<aside style="width: 256px; flex-shrink: 0; box-sizing: border-box; background: #FFFFFF; border-right: 1px solid #E3E1DA; padding: 20px 14px; display: flex; flex-direction: column; gap: 22px">
+<div style="display: flex; flex-direction: column; gap: 2px">
+<div style="font-size: 12px; font-weight: 700; letter-spacing: 0.06em; color: #5F5C55; padding: 0 8px 8px">EPICS</div>
+<a href="#" style="display: flex; justify-content: space-between; padding: 8px; border-radius: 8px; background: #E8EEFB; color: #2B4FB3; font-size: 14px; font-weight: 600; text-decoration: none"><span>All tasks</span><span>71</span></a>
+<sc-for list="{{epics}}" as="e" hint-placeholder-count="4">
+<a href="#" style="display: flex; flex-direction: column; gap: 6px; padding: 8px 8px 8px {{e.pad}}; border-radius: 8px; color: #1D1C1A; text-decoration: none">
+<span style="display: flex; justify-content: space-between; font-size: 14px"><span>{{e.name}}</span><span style="color: #5F5C55; font-size: 13px">{{e.count}}</span></span>
+<span style="height: 4px; border-radius: 2px; background: #ECEAE4; display: block; overflow: hidden"><span style="display: block; height: 4px; border-radius: 2px; width: {{e.pct}}; background: #2F6B45"></span></span>
+</a>
+</sc-for>
+</div>
+<div style="display: flex; flex-direction: column; gap: 2px">
+<div style="font-size: 12px; font-weight: 700; letter-spacing: 0.06em; color: #5F5C55; padding: 0 8px 8px">AGENTS</div>
+<sc-for list="{{agents}}" as="a" hint-placeholder-count="4">
+<a href="#" style="display: flex; align-items: center; gap: 10px; padding: 7px 8px; border-radius: 8px; color: #1D1C1A; text-decoration: none; font-size: 14px">
+<span style="width: 22px; height: 22px; box-sizing: border-box; border-radius: 11px; font-size: 11px; font-weight: 700; display: flex; align-items: center; justify-content: center; {{a.avatarStyle}}">{{a.initial}}</span>
+<span>{{a.name}}</span>
+<span style="margin-left: auto; font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 12px; color: #5F5C55">{{a.task}}</span>
+</a>
+</sc-for>
+</div>
+<div style="display: flex; flex-direction: column; gap: 8px">
+<div style="font-size: 12px; font-weight: 700; letter-spacing: 0.06em; color: #5F5C55; padding: 0 8px">LABELS</div>
+<div style="display: flex; flex-wrap: wrap; gap: 6px; padding: 0 8px">
+<sc-for list="{{labels}}" as="l" hint-placeholder-count="3"><a href="#" style="padding: 4px 10px; border-radius: 999px; border: 1px solid #E3E1DA; font-size: 13px; color: #1D1C1A; text-decoration: none">{{l}}</a></sc-for>
+</div>
+</div>
+</aside>
+
+<div style="flex-grow: 1; min-width: 0; box-sizing: border-box; display: flex; flex-direction: column; padding: 18px 24px 20px; gap: 14px">
+
+<div style="display: flex; align-items: center; gap: 10px; padding: 9px 12px; background: #FDF3E7; border: 1px solid #F3D9B8; border-radius: 10px">
+<span style="font-weight: 700; font-size: 14px; color: #8F4306">3 things need you</span>
+<sc-for list="{{needs}}" as="n" hint-placeholder-count="3"><a href="#" style="padding: 4px 10px; border-radius: 6px; background: #FFFFFF; border: 1px solid #F3D9B8; font-size: 13px; color: #1D1C1A; text-decoration: none">{{n}}</a></sc-for>
+<a href="#" style="margin-left: auto; font-size: 13px; font-weight: 600">See what to ask</a>
+</div>
+
+<div style="display: flex; align-items: center; gap: 8px">
+<h1 style="margin: 0 8px 0 0; font-size: 20px; font-weight: 700">Board</h1>
+<sc-for list="{{filters}}" as="f" hint-placeholder-count="4">
+<button type="button" style="height: 34px; display: flex; align-items: center; gap: 6px; padding: 0 10px 0 12px; border: 1px solid #E3E1DA; border-radius: 8px; background: #FFFFFF; font: inherit; font-size: 13px; color: #1D1C1A; cursor: pointer">{{f}}<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#5F5C55" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg></button>
+</sc-for>
+<span style="margin-left: auto; font-size: 13px; color: #5F5C55">Done shows the last 7 days</span>
+</div>
+
+<div style="flex-grow: 1; min-height: 0; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 14px">
+<sc-for list="{{columns}}" as="col" hint-placeholder-count="5">
+<section style="display: flex; flex-direction: column; gap: 10px; min-width: 0; background: #ECEAE4; border-radius: 12px; padding: 12px 10px">
+<div style="display: flex; align-items: center; gap: 8px; padding: 0 4px">
+<span style="width: 10px; height: 10px; border-radius: 5px; background: {{col.color}}"></span>
+<h2 style="margin: 0; font-size: 13px; font-weight: 700; letter-spacing: 0.04em">{{col.name}}</h2>
+<span style="margin-left: auto; font-size: 13px; color: #4F4C46; font-weight: 600">{{col.count}}</span>
+</div>
+<sc-for list="{{col.cards}}" as="c" hint-placeholder-count="3">
+<article style="background: #FFFFFF; border: 1px solid #E3E1DA; border-radius: 10px; padding: 11px 12px; display: flex; flex-direction: column; gap: 8px">
+<div style="display: flex; align-items: center; gap: 6px">
+<span style="font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 12px; color: #5F5C55">{{c.id}}</span>
+<sc-if value="{{c.suggested}}" hint-placeholder-val="{{ false }}"><span style="padding: 2px 6px; border-radius: 4px; background: #E8EEFB; color: #2B4FB3; font-size: 11px; font-weight: 600">suggested</span></sc-if>
+<sc-if value="{{c.hasLabel}}" hint-placeholder-val="{{ false }}"><span style="margin-left: auto; padding: 2px 6px; border-radius: 4px; border: 1px solid #E3E1DA; color: #4F4C46; font-size: 11px">{{c.label}}</span></sc-if>
+</div>
+<a href="#" style="font-size: 14px; font-weight: 600; line-height: 1.35; color: #1D1C1A; text-decoration: none">{{c.title}}</a>
+<sc-if value="{{c.hasEpic}}" hint-placeholder-val="{{ true }}"><span style="font-size: 12px; color: #5F5C55; display: flex; align-items: center; gap: 6px"><span style="width: 8px; height: 8px; flex-shrink: 0; border-radius: 2px; background: #8A867D"></span>{{c.epic}}</span></sc-if>
+<sc-if value="{{c.hasReason}}" hint-placeholder-val="{{ false }}"><span style="align-self: flex-start; padding: 3px 8px; border-radius: 6px; font-size: 12px; font-weight: 600; {{c.reasonStyle}}">{{c.reason}}</span></sc-if>
+<div style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: #5F5C55">
+<sc-if value="{{c.hasAgent}}" hint-placeholder-val="{{ false }}"><span style="width: 22px; height: 22px; box-sizing: border-box; border-radius: 11px; font-size: 11px; font-weight: 700; display: flex; align-items: center; justify-content: center; {{c.avatarStyle}}">{{c.initial}}</span><span>{{c.agent}}</span></sc-if>
+<span style="margin-left: auto">{{c.meta}}</span>
+</div>
+</article>
+</sc-for>
+<sc-if value="{{col.hasMore}}" hint-placeholder-val="{{ true }}"><a href="#" style="font-size: 13px; padding: 2px 4px; font-weight: 600">{{col.more}}</a></sc-if>
+</section>
+</sc-for>
+</div>
+
+</div>
+</div>
+</div>
+
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const av = {
+      amber: 'background: #A45F00; color: #FFFFFF',
+      jade: 'background: #17735A; color: #FFFFFF',
+      cobalt: 'background: #2F4DB5; color: #FFFFFF',
+      none: 'background: #FFFFFF; border: 1.5px dashed #8A867D; color: #5F5C55'
+    };
+    const reason = {
+      you: 'background: #FCEBD9; color: #8F4306',
+      dep: 'background: #FFF6EC; color: #8F4306; border: 1px solid #F3D9B8',
+      idle: 'background: #ECEAE4; color: #4F4C46'
+    };
+    const card = (c) => ({
+      suggested: false, label: '', epic: '', reason: '', reasonStyle: '', agent: '', initial: '', avatarStyle: '', meta: '',
+      ...c,
+      hasLabel: !!c.label, hasEpic: !!c.epic, hasReason: !!c.reason, hasAgent: !!c.agent
+    });
+    const col = (name, color, count, cards, more) => ({ name, color, count, cards: cards.map(card), hasMore: !!more, more: more || '' });
+    return {
+      epics: [
+        { name: 'Accounts & sign-in', count: '6/9', pct: '67%', pad: '8px' },
+        { name: 'Recipe search', count: '8/15', pct: '53%', pad: '8px' },
+        { name: 'Filters', count: '2/6', pct: '33%', pad: '24px' },
+        { name: 'Shopping list', count: '1/7', pct: '14%', pad: '8px' }
+      ],
+      agents: [
+        { name: 'Amber', initial: 'A', avatarStyle: av.amber, task: '#12' },
+        { name: 'Jade', initial: 'J', avatarStyle: av.jade, task: '#14' },
+        { name: 'Cobalt', initial: 'C', avatarStyle: av.cobalt, task: '#18' },
+        { name: 'No agent', initial: '?', avatarStyle: av.none, task: '#9' }
+      ],
+      labels: ['bug · 3', 'improvement · 5', 'docs · 1'],
+      needs: ['#14 question from Jade', '4 suggestions to approve', '#9 no agent for 20 h'],
+      filters: ['Epic: all', 'Agent: all', 'Label: all', 'Group by: none'],
+      columns: [
+        col('BACKLOG', '#8A867D', 18, [
+          { id: '#21', title: 'Sort search by relevance', suggested: true, epic: 'Recipe search', meta: 'suggested by Amber' },
+          { id: '#25', title: 'Cache recipe photos', suggested: true, label: 'improvement', meta: 'suggested by Cobalt' },
+          { id: '#26', title: 'Friendly sign-in error message', suggested: true, epic: 'Accounts & sign-in', meta: 'suggested by Amber' },
+          { id: '#30', title: 'Export shopping list as PDF', epic: 'Shopping list', meta: 'created by you' }
+        ], '+ 14 in backlog'),
+        col('READY', '#0F766E', 7, [
+          { id: '#19', title: 'Password reset by email', epic: 'Accounts & sign-in', meta: '1st in line' },
+          { id: '#20', title: 'Vegetarian filter', epic: 'Search › Filters', meta: '2nd in line' },
+          { id: '#23', title: 'Share list by link', epic: 'Shopping list', meta: '3rd in line' },
+          { id: '#24', title: 'App icon and name', label: 'improvement', meta: '4th in line' }
+        ], '+ 3 ready'),
+        col('IN PROGRESS', '#2B55C8', 3, [
+          { id: '#12', title: 'Sign in with Google', epic: 'Accounts & sign-in', agent: 'Amber', initial: 'A', avatarStyle: av.amber, meta: '3/5 · 2 min ago' },
+          { id: '#18', title: 'Offline shopping list', epic: 'Shopping list', agent: 'Cobalt', initial: 'C', avatarStyle: av.cobalt, meta: '1/6 · 30 s ago' },
+          { id: '#9', title: 'Sign-up screen', epic: 'Accounts & sign-in', reason: 'No agent for 20 h', reasonStyle: reason.idle, meta: '4/7' }
+        ], ''),
+        col('BLOCKED', '#B45309', 2, [
+          { id: '#14', title: 'Filter by prep time', epic: 'Search › Filters', reason: 'Waiting on you', reasonStyle: reason.you, agent: 'Jade', initial: 'J', avatarStyle: av.jade, meta: '2/4 · 11 min ago' },
+          { id: '#22', title: 'Sign in with Apple', epic: 'Accounts & sign-in', reason: 'Waiting on #12', reasonStyle: reason.dep, meta: 'back to Ready when #12 closes' }
+        ], ''),
+        col('DONE', '#2F6B45', 41, [
+          { id: '#7', title: 'Search by ingredient', epic: 'Recipe search', agent: 'Amber', initial: 'A', avatarStyle: av.amber, meta: '1 h ago' },
+          { id: '#5', title: 'Recipe model in the database', agent: 'Cobalt', initial: 'C', avatarStyle: av.cobalt, meta: '3 h ago' },
+          { id: '#4', title: 'Home screen', agent: 'Amber', initial: 'A', avatarStyle: av.amber, meta: 'yesterday' }
+        ], 'See all 41')
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>
