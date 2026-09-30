@@ -4811,7 +4811,7 @@ Record anything unexpected as a task. Plan 3 runs the full acceptance script.
     - outside git without an `.agentboard/` marker, starting the dashboard from a subfolder opens a different board; start from the project folder or add `--dir`;
     - `agents.json` is rewritten on every hook call; debounce the file watcher.
 - **Carried over to plan 3, before the first push:**
-  - The acceptance script runs headless sessions with `--strict-mcp-config` (or notes it), because `--setting-sources project,local` still loads the account's claude.ai connectors.
+  - The acceptance script runs headless sessions with `--strict-mcp-config` (or notes it), because `--setting-sources project,local` still loads the account's claude.ai connectors. Careful: in Claude Code 2.1.247 `--strict-mcp-config` also drops the plugin's own MCP server, so pass it again with `--mcp-config` (see plan 2's execution notes).
   - README requirements: Claude Code 2.1.139 or newer (hooks use exec form with `args`), and Node.js 22 or newer on PATH.
   - The repository root `.mcp.json` is also offered as a project server to contributors who open this repository in Claude Code; it fails harmlessly because `${CLAUDE_PLUGIN_ROOT}` is not set there. Decide whether to move the plugin files or document it.
   - The skill maps "open the board" once the dashboard exists (plan 2).
