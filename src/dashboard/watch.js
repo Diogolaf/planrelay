@@ -20,8 +20,8 @@ const DEBOUNCE_MS = 150;
  * - a poll every `pollMs` comparing the log's size and the registry's mtime, for file systems where
  *   fs.watch misses changes (network drives, some containers).
  * A burst of changes is one onChange call, `debounceMs` after the last one. A board folder that does
- * not exist yet is polled until it appears, then watched; a watcher that fails (its folder removed)
- * is dropped, and the poll starts a new one when it can. Never throws out of a callback: a failing
+ * not exist yet is polled until it appears, then watched; a watcher that fails, or whose folder is
+ * removed, is dropped, and the poll starts a new one when it can. Never throws out of a callback: a failing
  * onChange is logged to errors.log. Until close(), the watcher and the poll keep the process alive.
  * @param {Board} board @param {() => void} onChange @param {WatchOptions} [opts]
  * @returns {{ close: () => void, readonly watching: boolean }} watching: fs.watch is running
@@ -73,6 +73,12 @@ export function watchBoard(board, onChange, { pollMs = POLL_MS, debounceMs = DEB
     try {
       watcher = fs.watch(board.dir, (_type, name) => {
         if (name == null || names.has(String(name))) changed();
+        else if (!fs.existsSync(board.dir)) {
+          // the folder was removed: Windows then reports it by its own path in a tight loop, never
+          // as an error, until the watcher is closed; the poll watches it again once it is back
+          drop();
+          changed();
+        }
       });
       watcher.on('error', drop);
     } catch {

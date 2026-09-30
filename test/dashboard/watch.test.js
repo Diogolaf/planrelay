@@ -85,6 +85,41 @@ test('a board folder created after the start is picked up, then watched', async 
   }
 });
 
+test('a deleted board folder drops the watcher without spinning; once it is back, it is watched again', async (t) => {
+  const { board, write } = boardWithWriter();
+  write();
+  // count what fs.watch delivers, to see a later write arrive through the new watcher
+  const realWatch = fs.watch;
+  let delivered = 0;
+  t.mock.method(fs, 'watch', (dir, listener) => realWatch(dir, (type, name) => {
+    delivered += 1;
+    listener(type, name);
+  }));
+  let calls = 0;
+  const w = watchBoard(board, () => { calls += 1; }, { pollMs: 100, debounceMs: 20 });
+  try {
+    assert.equal(w.watching, true);
+    fs.rmSync(board.dir, { recursive: true, force: true });
+    await waitFor(() => !w.watching);
+    // Windows reports a deleted watched folder by its own path, over and over, until it is closed
+    const cpu = process.cpuUsage();
+    const start = Date.now();
+    await sleep(500);
+    const diff = process.cpuUsage(cpu);
+    const used = (diff.user + diff.system) / 1000;
+    assert.ok(used < 0.5 * (Date.now() - start), `${Math.round(used)} ms of CPU in ${Date.now() - start} ms`);
+    write(); // the folder is back
+    await waitFor(() => w.watching);
+    const seen = calls;
+    const before = delivered;
+    write();
+    await waitFor(() => calls > seen);
+    assert.ok(delivered > before);
+  } finally {
+    w.close();
+  }
+});
+
 test('a failing onChange is logged, and watching goes on', async () => {
   const { board, write } = boardWithWriter();
   write();
