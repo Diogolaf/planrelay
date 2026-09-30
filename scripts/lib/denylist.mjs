@@ -260,3 +260,37 @@ export function parseRevListObjects(output) {
   }
   return objects;
 }
+
+/**
+ * The entries of a tar archive (already gunzipped): each header's path and its content, whatever
+ * the entry type. Extended headers (pax, GNU long names) come out as entries too, so a long path
+ * they carry is scanned as content.
+ * @param {Uint8Array} bytes
+ * @returns {{ path: string, type: string, content: Buffer }[]}
+ */
+export function readTar(bytes) {
+  const buf = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const field = (from, length) => {
+    const raw = buf.subarray(from, from + length);
+    const end = raw.indexOf(0);
+    return raw.subarray(0, end === -1 ? length : end).toString('utf8');
+  };
+  const entries = [];
+  let pos = 0;
+  while (pos + 512 <= buf.length) {
+    if (buf.subarray(pos, pos + 512).every((b) => b === 0)) break; // the end-of-archive blocks
+    const size = Number.parseInt(field(pos + 124, 12).trim() || '0', 8);
+    if (field(pos + 257, 5) !== 'ustar' || !Number.isInteger(size) || size < 0 || pos + 512 + size > buf.length) {
+      throw new Error('malformed tar archive');
+    }
+    const prefix = field(pos + 345, 155);
+    const name = field(pos, 100);
+    entries.push({
+      path: prefix ? `${prefix}/${name}` : name,
+      type: String.fromCharCode(buf[pos + 156] || 48), // an empty type flag is a regular file
+      content: buf.subarray(pos + 512, pos + 512 + size),
+    });
+    pos += 512 + Math.ceil(size / 512) * 512;
+  }
+  return entries;
+}

@@ -9,6 +9,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import zlib from 'node:zlib';
 import { tempDir } from '../helpers.js';
 
 const REPO_ROOT = fileURLToPath(new URL('../../', import.meta.url));
@@ -239,7 +240,7 @@ test('--all scans tracked files and skips files deleted from the working tree', 
 
 test('unknown modes and missing arguments print usage and exit 2', () => {
   const { run } = tempRepo();
-  for (const args of [['--bogus'], [], ['--message'], ['--message', ''], ['--staged', 'extra']]) {
+  for (const args of [['--bogus'], [], ['--message'], ['--message', ''], ['--staged', 'extra'], ['--tarball']]) {
     const r = run(args);
     assert.equal(r.status, 2, `args: ${args.join(' ')}`);
     assert.match(r.stderr, /usage:/);
@@ -473,4 +474,53 @@ test("a local commit may not use GitHub's web committer address", () => {
   const r = run(['--staged'], { GIT_COMMITTER_EMAIL: 'noreply@github.com' });
   assert.equal(r.status, 1, r.stderr);
   assert.match(r.stderr, /the committer e-mail is not allowed/);
+});
+
+/** A minimal ustar archive: one header block per file, its content padded to 512 bytes, two empty blocks. */
+function tarOf(files) {
+  const blocks = [];
+  for (const { path: p, content, prefix = '', type = '0' } of files) {
+    const data = Buffer.from(content);
+    const header = Buffer.alloc(512);
+    header.write(p, 0, 100, 'utf8');
+    header.write(data.length.toString(8).padStart(11, '0'), 124, 12, 'ascii');
+    header.write(type, 156, 1, 'ascii');
+    header.write('ustar', 257, 6, 'ascii');
+    header.write(prefix, 345, 155, 'utf8');
+    blocks.push(header, data, Buffer.alloc((512 - (data.length % 512)) % 512));
+  }
+  blocks.push(Buffer.alloc(1024));
+  return Buffer.concat(blocks);
+}
+
+test('--tarball scans the paths and the contents of a packed package, without git', () => {
+  const { home, run } = tempRepo();
+  const tgz = path.join(home, 'pkg.tgz');
+  fs.writeFileSync(tgz, zlib.gzipSync(tarOf([
+    { path: 'package/README.md', content: 'hello\nmade at ZorbaCorp\n' },
+    { path: 'package/docs/quux-project.md', content: 'clean\n' },
+  ])));
+  const r = run(['--tarball', tgz], {}, { cwd: home }); // home is not a repository
+  assert.equal(r.status, 1, r.stderr);
+  assert.match(r.stderr, /denylist: package\/README\.md:2 matches entry #1/);
+  assert.match(r.stderr, /denylist: package\/docs\/\*\*\*\.md:\(path\) matches entry #2/);
+  assert.match(r.stderr, /Remove them from the package\./);
+  assertNoLeak(r);
+
+  fs.writeFileSync(tgz, zlib.gzipSync(tarOf([{ path: 'package/README.md', content: 'hello\n' }])));
+  assert.equal(run(['--tarball', tgz], {}, { cwd: home }).status, 0);
+});
+
+test('--tarball fails closed on a file that is not a package', () => {
+  const { home, run } = tempRepo();
+  const file = path.join(home, 'pkg.tgz');
+  fs.writeFileSync(file, 'plain text');
+  const bad = run(['--tarball', file]);
+  assert.equal(bad.status, 1, bad.stderr);
+  assert.match(bad.stderr, /could not read the package/);
+  fs.writeFileSync(file, zlib.gzipSync(Buffer.alloc(1024)));
+  const empty = run(['--tarball', file]);
+  assert.equal(empty.status, 1, empty.stderr);
+  assert.match(empty.stderr, /the package is empty/);
+  assert.equal(run(['--tarball', path.join(home, 'missing.tgz')]).status, 1);
 });

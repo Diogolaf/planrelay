@@ -11,6 +11,7 @@
 //   --history         every blob, path, commit, annotated tag and ref name reachable from all refs,
 //                     plus the commit and tagger e-mails (refused in a shallow clone)
 //   --message <file>  the part of a commit message git will store (commit-msg)
+//   --tarball <file>  every path and file of a packed npm package (.tgz), no repository needed (npm run check:pack)
 //
 // Fails closed: any git or IO error aborts the scan with exit code 1.
 // This file always runs main (importing it runs the scan); the pure logic lives in
@@ -19,6 +20,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import zlib from 'node:zlib';
 import {
   ALLOWED_EMAIL,
   cutAtScissors,
@@ -30,20 +32,22 @@ import {
   parseRawDiff,
   parseRevListObjects,
   parseTerms,
+  readTar,
   splitIdent,
   WEB_COMMITTER_EMAIL,
 } from './lib/denylist.mjs';
 
 const MAX_BUFFER = 512 * 1024 * 1024;
 const GITLINK = '160000'; // a submodule entry: the object is a commit in another repository
-const USAGE = 'usage: node scripts/check-denylist.mjs --staged | --all | --history | --message <file>';
+const USAGE = 'usage: node scripts/check-denylist.mjs --staged | --all | --history | --message <file> | --tarball <file>';
 /** Mode -> number of arguments it takes. */
-const MODES = new Map([['--staged', 0], ['--all', 0], ['--history', 0], ['--message', 1]]);
+const MODES = new Map([['--staged', 0], ['--all', 0], ['--history', 0], ['--message', 1], ['--tarball', 1]]);
 const ADVICE = {
   '--staged': 'Remove them before committing.',
   '--all': 'Remove them from the repository.',
   '--history': 'Rewrite the history before publishing.',
   '--message': 'Edit the commit message.',
+  '--tarball': 'Remove them from the package.',
 };
 
 /** An error whose message is safe to print (it still goes through maskTerms). */
@@ -302,6 +306,18 @@ function scanMessage(file, terms, report) {
   }
 }
 
+/** A packed npm package (.tgz): every entry's path and content. */
+function scanTarball(file, terms, report) {
+  let entries;
+  try {
+    entries = readTar(zlib.gunzipSync(fs.readFileSync(file)));
+  } catch (err) {
+    throw new GuardError(`could not read the package (${err.code || err.name}).`);
+  }
+  if (entries.length === 0) throw new GuardError('the package is empty.');
+  reportFileHits(entries.map((e) => ({ path: e.path, text: decodeText(e.content) })), terms, report);
+}
+
 function main(argv) {
   const [mode, ...args] = argv;
   if (!MODES.has(mode) || args.length !== MODES.get(mode) || args.some((a) => a === '')) {
@@ -315,6 +331,8 @@ function main(argv) {
   const report = (line) => findings.add(line);
   if (mode === '--message') {
     scanMessage(args[0], loadedTerms, report);
+  } else if (mode === '--tarball') {
+    scanTarball(args[0], loadedTerms, report);
   } else {
     const root = git(process.cwd(), ['rev-parse', '--show-toplevel']).toString('utf8').replace(/\r?\n$/, '');
     if (mode === '--staged') scanStaged(root, loadedTerms, report);

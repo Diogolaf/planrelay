@@ -12,6 +12,7 @@
     "test": "node --test \"test/**/*.test.js\"",
     "test:ui": "node --test \"test/ui/**/*.ui.js\"",
     "check:leaks": "node scripts/check-denylist.mjs --all",
+    "check:pack": "node scripts/check-pack.mjs",
     "check:history": "node scripts/check-denylist.mjs --history",
     "screenshots": "node scripts/screenshots.mjs"
   },

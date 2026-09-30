@@ -13,6 +13,7 @@ import {
   parseRawDiff,
   parseRevListObjects,
   parseTerms,
+  readTar,
   splitIdent,
 } from '../../../scripts/lib/denylist.mjs';
 
@@ -212,4 +213,43 @@ test('parseRevListObjects keeps the path after the first space', () => {
     { sha: a, path: '' },
     { sha: a, path: 'dir/with space.txt' },
   ]);
+});
+
+/** A minimal ustar archive: one header block per file, its content padded to 512 bytes, two empty blocks. */
+function tarOf(files) {
+  const blocks = [];
+  for (const { path: p, content, prefix = '', type = '0' } of files) {
+    const data = Buffer.from(content);
+    const header = Buffer.alloc(512);
+    header.write(p, 0, 100, 'utf8');
+    header.write(data.length.toString(8).padStart(11, '0'), 124, 12, 'ascii');
+    header.write(type, 156, 1, 'ascii');
+    header.write('ustar', 257, 6, 'ascii');
+    header.write(prefix, 345, 155, 'utf8');
+    blocks.push(header, data, Buffer.alloc((512 - (data.length % 512)) % 512));
+  }
+  blocks.push(Buffer.alloc(1024));
+  return Buffer.concat(blocks);
+}
+
+test('readTar returns every entry with its path and content', () => {
+  const entries = readTar(tarOf([
+    { path: 'package/package.json', content: '{}\n' },
+    { path: 'cli.js', prefix: 'package/src', content: 'x'.repeat(600) },
+    { path: 'PaxHeader', type: 'x', content: '30 path=package/a-long-name.md\n' },
+    { path: 'package/empty.txt', content: '' },
+  ]));
+  assert.deepEqual(entries.map((e) => [e.path, e.type, e.content.length]), [
+    ['package/package.json', '0', 3],
+    ['package/src/cli.js', '0', 600],
+    ['PaxHeader', 'x', 31],
+    ['package/empty.txt', '0', 0],
+  ]);
+  assert.equal(entries[0].content.toString('utf8'), '{}\n');
+});
+
+test('readTar refuses what is not a tar archive', () => {
+  assert.throws(() => readTar(Buffer.from('not a tar archive, just some text '.repeat(40))), /malformed tar archive/);
+  const cut = tarOf([{ path: 'a.txt', content: 'x'.repeat(2000) }]).subarray(0, 1024);
+  assert.throws(() => readTar(cut), /malformed tar archive/);
 });
