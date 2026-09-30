@@ -12,7 +12,8 @@
     "test": "node --test \"test/**/*.test.js\"",
     "test:ui": "node --test \"test/ui/**/*.ui.js\"",
     "check:leaks": "node scripts/check-denylist.mjs --all",
-    "check:history": "node scripts/check-denylist.mjs --history"
+    "check:history": "node scripts/check-denylist.mjs --history",
+    "screenshots": "node scripts/screenshots.mjs"
   },
   "devDependencies": {
     "playwright": "^1.63.0"

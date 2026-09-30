@@ -175,7 +175,9 @@ button, input, select { font: inherit; color: inherit; }
   border-bottom: 1px solid var(--border);
 }
 
-.brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
+/* The search box gives way before the project name, which is cut only when the rest of the header
+ * (tabs, gaps, the search box at its narrowest, the live status: about 660 px) leaves it no room. */
+.brand { display: flex; align-items: center; gap: 10px; flex-shrink: 0; min-width: 0; max-width: calc(100% - 660px); }
 .logo { flex-shrink: 0; }
 .logo-accent { fill: var(--accent); }
 .logo-ink { fill: var(--text); }
