@@ -108,6 +108,9 @@ function recipient(reg, to, agentId) {
 export function formatBrief({ agentName, projectName, state, reg, agentId, pings, maxPings, rulesFile, configProblems = [] }) {
   const header = [
     `${NAME}: you are agent ${agentName} on this board; other agents address you by that name. Follow the ${NAME} skill.`,
+    // Hosts have task tools of their own (Claude Code: TaskCreate, TodoWrite), which agents otherwise reach for.
+    `${NAME}: when the human says task, epic or backlog, they mean this board: use the ${NAME} tools (create_task, list_tasks, ` +
+      `claim_task, complete_task…), not TaskCreate or TodoWrite. If those tools are deferred, load them with ToolSearch first.`,
   ];
   if (rulesFile) header.push(`${NAME}: this project has rules in ${rulesFile}. Read them before starting work.`);
 

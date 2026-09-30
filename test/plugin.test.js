@@ -103,7 +103,12 @@ test('skill front matter', () => {
   const text = fs.readFileSync(SKILL, 'utf8');
   assert.match(text, new RegExp(`^---\\nname: ${NAME}\\ndescription: .+\\n---\\n`));
   // the description is listed in every session; the body stays in context once loaded
-  assert.ok(/^description: (.+)$/m.exec(text)[1].length < 400);
+  const description = /^description: (.+)$/m.exec(text)[1];
+  assert.ok(description.length < 400);
+  // it triggers on board words, and "task" means a board task, not the host's own task tools
+  for (const word of ['task', 'epic', 'backlog', 'board', 'what should I work on', 'handoff']) assert.ok(description.includes(word), word);
+  assert.match(description, /"Task" means a task on this board \(create_task\), not TaskCreate or TodoWrite/);
+  assert.doesNotMatch(description, /: /); // a plain YAML scalar
   assert.ok(text.length < 7000, `the skill is ${text.length} characters`);
 });
 

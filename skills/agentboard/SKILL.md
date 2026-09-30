@@ -1,6 +1,6 @@
 ---
 name: agentboard
-description: Use in every session of a project that has the agentboard plugin. How to keep work on the shared task board, hand off between sessions, coordinate with other agents, and act on requests like "create a task", "what's ready?", "approve #21", "answer #14" or "resume #9".
+description: Use in every session of a project with the agentboard plugin, and whenever the human mentions a task, epic, backlog or the board, asks "what should I work on?", or asks for a handoff. "Task" means a task on this board (create_task), not TaskCreate or TodoWrite. Covers handoffs between sessions, other agents, and requests like "what's ready?", "approve #21" or "resume #9".
 ---
 
 # Working on the agentboard

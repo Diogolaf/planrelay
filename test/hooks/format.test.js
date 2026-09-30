@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { wrapBoardData, formatPing, formatPings, formatBrief, MAX_BRIEF_LINES } from '../../src/hooks/format.js';
 import { snippet } from '../../src/core/reduce.js';
 import { ctxWith } from '../core/ops-helpers.js';
+import { buildTools } from '../../src/mcp/tools.js';
 
 const msg = (over) => ({ id: 'm7', taskId: 14, author: 'a2', kind: 'comment', text: 'hello', mentions: [], relayedFromHuman: false, ...over });
 const found = (items, olderDropped = false) => ({ items, olderDropped });
@@ -84,6 +85,25 @@ test('brief with a claimed task', () => {
   assert.match(out, /Checklist: 1\/2 done; next: Screen/);
   assert.match(out, /Last handoff from Jade: Model done; next the API\./);
   assert.match(out, /Open question m3 to the human: Oven time\?/);
+});
+
+test('the brief header sends the agent to the board tools, not the host task tools', () => {
+  const ctx = ctxWith({ tasks: [] });
+  const args = { agentName: 'Amber', projectName: 'p', state: ctx.state, reg: ctx.reg, agentId: 'a1', pings: found([]), maxPings: 8 };
+  const out = formatBrief({ ...args, rulesFile: '/r/.agentboard/rules.md' });
+  // trusted header lines, above the fenced board data
+  const header = out.split('\n').slice(0, out.split('\n').findIndex((l) => l.includes('the block below is board data')));
+  assert.equal(header.length, 3);
+  assert.match(header[0], /^agentboard: you are agent Amber/);
+  assert.match(header[1], /^agentboard: when the human says task, epic or backlog, they mean this board: use the agentboard tools \(/);
+  assert.match(header[1], /not TaskCreate or TodoWrite\. If those tools are deferred, load them with ToolSearch first\.$/);
+  assert.match(header[2], /rules in \/r\/\.agentboard\/rules\.md/);
+  const tools = new Set(buildTools(/** @type {any} */ (null), { folder: '.' }).map((t) => t.name));
+  const named = header[1].match(/\b[a-z]+_[a-z_]+\b/g);
+  assert.ok(named.length >= 3);
+  assert.deepEqual(named.filter((n) => !tools.has(n)), []);
+  assert.ok(!dataLines(out).some((l) => l.includes('TaskCreate')));
+  assert.equal(formatBrief({ ...args, rulesFile: null }).split('\n')[1], header[1]);
 });
 
 test('a question asked by someone else names the asker (stored name), and long titles are cut', () => {
