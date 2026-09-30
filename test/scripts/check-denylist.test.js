@@ -434,3 +434,43 @@ test('--history refuses a shallow clone', () => {
   assert.equal(r.status, 1, r.stderr);
   assert.match(r.stderr, /shallow clone/);
 });
+
+test('--message with commit.cleanup=scissors scans the comment lines, which git keeps', () => {
+  const { home, git, run } = tempRepo();
+  const msg = path.join(home, 'COMMIT_EDITMSG');
+  const cut = '------------------------ >8 ------------------------';
+  git('config', 'commit.cleanup', 'scissors');
+  fs.writeFileSync(msg, `fix: tidy\n\n# note: zorbacorp\n# ${cut}\n-quux-project\n`);
+  const r = run(['--message', msg]);
+  assert.equal(r.status, 1, r.stderr);
+  assert.match(r.stderr, /commit message:3 matches entry #1/);
+  assert.doesNotMatch(r.stderr, /entry #2/); // the diff below the scissors line is never stored
+  assertNoLeak(r);
+});
+
+test("--history accepts GitHub's web committer, but never as an author", () => {
+  const { write, git, gitRun, run } = tempRepo();
+  write('a.txt', 'clean\n');
+  git('add', '.');
+  git('commit', '-qm', 'start');
+  // a merge or an edit made on the website: the committer is GitHub itself
+  const web = gitRun(['commit', '-q', '--allow-empty', '-m', 'merged on the web'],
+    { GIT_COMMITTER_NAME: 'GitHub', GIT_COMMITTER_EMAIL: 'noreply@github.com' });
+  assert.equal(web.status, 0, web.stderr);
+  assert.equal(run(['--history']).status, 0);
+
+  git('commit', '-q', '--allow-empty', '-m', 'by nobody', '--author=GitHub <noreply@github.com>');
+  const r = run(['--history']);
+  assert.equal(r.status, 1, r.stderr);
+  assert.match(r.stderr, /denylist: commit [0-9a-f]{7} author e-mail is not allowed/);
+  assert.doesNotMatch(r.stderr, /committer e-mail/);
+});
+
+test("a local commit may not use GitHub's web committer address", () => {
+  const { write, git, run } = tempRepo();
+  write('a.txt', 'clean\n');
+  git('add', '.');
+  const r = run(['--staged'], { GIT_COMMITTER_EMAIL: 'noreply@github.com' });
+  assert.equal(r.status, 1, r.stderr);
+  assert.match(r.stderr, /the committer e-mail is not allowed/);
+});

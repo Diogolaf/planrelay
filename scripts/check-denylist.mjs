@@ -31,6 +31,7 @@ import {
   parseRevListObjects,
   parseTerms,
   splitIdent,
+  WEB_COMMITTER_EMAIL,
 } from './lib/denylist.mjs';
 
 const MAX_BUFFER = 512 * 1024 * 1024;
@@ -245,7 +246,9 @@ function scanHistory(root, terms, report) {
     if (lines.length < 5) continue;
     const [sha, , authorEmail, , committerEmail] = lines;
     if (!ALLOWED_EMAIL.test(authorEmail)) report(`denylist: commit ${short(sha)} author e-mail is not allowed`);
-    if (!ALLOWED_EMAIL.test(committerEmail)) report(`denylist: commit ${short(sha)} committer e-mail is not allowed`);
+    if (!ALLOWED_EMAIL.test(committerEmail) && committerEmail !== WEB_COMMITTER_EMAIL) {
+      report(`denylist: commit ${short(sha)} committer e-mail is not allowed`);
+    }
     const found = new Set(matchText(lines.slice(1).join('\n'), terms).map((h) => h.term));
     for (const k of found) report(`denylist: commit ${short(sha)} metadata matches entry #${k}`);
   }
@@ -280,8 +283,8 @@ function storedMessage(text) {
   if (process.env.GIT_EDITOR === ':') return text;
   const cut = cutAtScissors(text);
   const cleanup = git(process.cwd(), ['config', '--default', 'default', 'commit.cleanup']).toString('utf8').trim();
-  // verbatim and whitespace keep comment lines in the stored message.
-  if (cleanup === 'verbatim' || cleanup === 'whitespace') return cut;
+  // verbatim, whitespace and scissors keep comment lines in the stored message.
+  if (cleanup === 'verbatim' || cleanup === 'whitespace' || cleanup === 'scissors') return cut;
   // git stripspace honours core.commentChar, as git commit does.
   return git(process.cwd(), ['stripspace', '--strip-comments'], cut).toString('utf8');
 }

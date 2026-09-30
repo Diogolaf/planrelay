@@ -6,6 +6,9 @@
 /** Commit e-mails allowed in this repository: a GitHub no-reply address or the local placeholder. */
 export const ALLOWED_EMAIL = /^[^@\s<>]+@(users\.noreply\.github\.com|example\.invalid)$/i;
 
+/** The committer of merges and edits made on github.com. Accepted in history as a committer only. */
+export const WEB_COMMITTER_EMAIL = 'noreply@github.com';
+
 /** C0 and C1 control characters, including NUL. A term never contains one. */
 const CONTROL = /\p{Cc}/u;
 
