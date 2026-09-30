@@ -1,0 +1,9 @@
+#!/bin/sh
+# Leak guard for what a push would publish: private terms and commit e-mails in the commits
+# the remote does not have yet, then secrets in the whole history.
+node scripts/check-denylist.mjs --push "$1" || exit 1
+if command -v gitleaks >/dev/null 2>&1; then
+  gitleaks git --redact --no-banner . || exit 1
+else
+  echo "pre-push: gitleaks is not installed; CI will still run it." >&2
+fi

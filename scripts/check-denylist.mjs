@@ -10,6 +10,9 @@
 //   --all             tracked files in the working tree (npm run check:leaks, CI)
 //   --history         every blob, path, commit, annotated tag and ref name reachable from all refs,
 //                     plus the commit and tagger e-mails (refused in a shallow clone)
+//   --push <remote>   what a push would publish (pre-push): for each pushed ref read from stdin, its name on
+//                     the remote and the commits <remote> does not have yet, checked as --history checks
+//                     them; commits that still carry the local placeholder e-mail are refused as well
 //   --message <file>  the part of a commit message git will store (commit-msg)
 //   --tarball <file>  every path and file of a packed npm package (.tgz), no repository needed (npm run check:pack)
 //
@@ -32,6 +35,7 @@ import {
   parseRawDiff,
   parseRevListObjects,
   parseTerms,
+  PLACEHOLDER_EMAIL,
   readTar,
   splitIdent,
   WEB_COMMITTER_EMAIL,
@@ -39,13 +43,18 @@ import {
 
 const MAX_BUFFER = 512 * 1024 * 1024;
 const GITLINK = '160000'; // a submodule entry: the object is a commit in another repository
-const USAGE = 'usage: node scripts/check-denylist.mjs --staged | --all | --history | --message <file> | --tarball <file>';
+const NO_OBJECT = /^0+$/; // the all-zeros object name: nothing on that side (a deleted file, a deleted ref)
+/** A line of the pre-push hook's input: `<local ref> <local sha> <remote ref> <remote sha>`. */
+const PUSHED_REF = /^.+ ([0-9a-f]{40,64}) (\S+) [0-9a-f]{40,64}$/;
+const USAGE =
+  'usage: node scripts/check-denylist.mjs --staged | --all | --history | --push <remote> | --message <file> | --tarball <file>';
 /** Mode -> number of arguments it takes. */
-const MODES = new Map([['--staged', 0], ['--all', 0], ['--history', 0], ['--message', 1], ['--tarball', 1]]);
+const MODES = new Map([['--staged', 0], ['--all', 0], ['--history', 0], ['--push', 1], ['--message', 1], ['--tarball', 1]]);
 const ADVICE = {
   '--staged': 'Remove them before committing.',
   '--all': 'Remove them from the repository.',
   '--history': 'Rewrite the history before publishing.',
+  '--push': 'Rewrite the history before pushing.',
   '--message': 'Edit the commit message.',
   '--tarball': 'Remove them from the package.',
 };
@@ -191,15 +200,19 @@ function scanAll(root, terms, report) {
   }
 }
 
-/** Everything reachable from any ref: what a push would publish. */
-function scanHistory(root, terms, report) {
+/**
+ * Everything reachable from `revs` (by default, from any ref): what a push would publish.
+ * With `publishing`, `revs` is the very set of commits being pushed: what they delete is not
+ * published, the ref names are the caller's to check, and the local placeholder e-mail is refused.
+ */
+function scanHistory(root, terms, report, { revs = ['--all'], publishing = false } = {}) {
   // A shallow clone lacks the older commits, so a clean result would be meaningless.
   if (git(root, ['rev-parse', '--is-shallow-repository']).toString('utf8').trim() !== 'false') {
     throw new GuardError('this is a shallow clone, so older history cannot be checked; run `git fetch --unshallow` first.');
   }
 
-  // Every object reachable from all refs, with the first path git gives it.
-  const listed = parseRevListObjects(git(root, ['rev-list', '--all', '--objects']));
+  // Every object reachable from the revisions, with the first path git gives it.
+  const listed = parseRevListObjects(git(root, ['rev-list', '--objects', ...revs]));
   const shas = [...new Set(listed.map((o) => o.sha))];
   const types = new Map();
   if (shas.length) {
@@ -215,7 +228,7 @@ function scanHistory(root, terms, report) {
   // Every (path, blob) pair of every commit. rev-list names each object once, so a path
   // whose content also lives elsewhere (an empty file, say) only shows up here.
   const pairs = parseRawDiff(
-    git(root, ['log', '--all', '--root', '-m', '--raw', '--no-renames', '--no-abbrev', '-z', '--format=', '--no-color']),
+    git(root, ['log', '--root', '-m', '--raw', '--no-renames', '--no-abbrev', '-z', '--format=', '--no-color', ...revs]),
   );
   const pathOf = new Map(); // blob -> a path, for the report
   const paths = new Map(); // path -> an object, for the report
@@ -226,6 +239,8 @@ function scanHistory(root, terms, report) {
     if (!paths.has(p)) paths.set(p, sha);
   }
   for (const e of pairs) {
+    // A pushed commit that deletes a file publishes neither the file nor its path: the remote has both.
+    if (publishing && NO_OBJECT.test(e.dstSha)) continue;
     if (!pathOf.has(e.dstSha)) pathOf.set(e.dstSha, e.path);
     if (!paths.has(e.path)) paths.set(e.path, e.dstSha);
   }
@@ -242,9 +257,10 @@ function scanHistory(root, terms, report) {
   // Commit metadata: author and committer names and e-mails, full messages (raw, no mailmap).
   // Both e-mails must also be allowed addresses, as the pre-commit identity check demands.
   const log = git(root, [
-    'log', '--all', '-z', '--no-show-signature', '--no-use-mailmap', '--encoding=UTF-8', '--no-color',
-    '--format=%H%n%an%n%ae%n%cn%n%ce%n%B',
+    'log', '-z', '--no-show-signature', '--no-use-mailmap', '--encoding=UTF-8', '--no-color',
+    '--format=%H%n%an%n%ae%n%cn%n%ce%n%B', ...revs,
   ]).toString('utf8');
+  let placeholders = 0; // commits made with the local placeholder identity
   for (const record of log.split('\0')) {
     const lines = record.replace(/^\n+/, '').split('\n');
     if (lines.length < 5) continue;
@@ -253,8 +269,13 @@ function scanHistory(root, terms, report) {
     if (!ALLOWED_EMAIL.test(committerEmail) && committerEmail !== WEB_COMMITTER_EMAIL) {
       report(`denylist: commit ${short(sha)} committer e-mail is not allowed`);
     }
+    if (PLACEHOLDER_EMAIL.test(authorEmail) || PLACEHOLDER_EMAIL.test(committerEmail)) placeholders++;
     const found = new Set(matchText(lines.slice(1).join('\n'), terms).map((h) => h.term));
     for (const k of found) report(`denylist: commit ${short(sha)} metadata matches entry #${k}`);
+  }
+  if (publishing && placeholders) {
+    const some = placeholders === 1 ? '1 commit still carries' : `${placeholders} commits still carry`;
+    report(`denylist: ${some} the local placeholder e-mail; rewrite the authors before publishing (docs/RELEASING.md)`);
   }
 
   // Annotated tags (name, tagger, message) and ref names are published by a push too.
@@ -270,9 +291,36 @@ function scanHistory(root, terms, report) {
     const found = new Set(matchText(text, terms).map((h) => h.term));
     for (const k of found) report(`denylist: tag ${name} metadata matches entry #${k}`);
   }
+  if (publishing) return; // a push names its refs itself (see scanPush)
   for (const ref of git(root, ['for-each-ref', '--format=%(refname)']).toString('utf8').split('\n').filter(Boolean)) {
     for (const h of matchText(ref, terms)) report(`denylist: ref ${ref} matches entry #${h.term}`);
   }
+}
+
+/** The pre-push hook's standard input: one line per pushed ref, nothing when the remote is up to date. */
+function readPushedRefs() {
+  try {
+    return fs.readFileSync(0, 'utf8');
+  } catch (err) {
+    throw new GuardError(`could not read the pushed refs (${err.code || err.name}).`);
+  }
+}
+
+/** What a push would publish (pre-push): for each pushed ref, its name and the commits `remote` does not have yet. */
+function scanPush(root, remote, input, terms, report) {
+  const tips = new Set();
+  for (const line of input.split('\n').map((l) => l.trim()).filter(Boolean)) {
+    // Read from the right: only the local ref can hold a space (HEAD@{1 day ago}), and it is not published.
+    const m = PUSHED_REF.exec(line);
+    if (!m) throw new GuardError('unexpected pre-push input; nothing was approved.');
+    const [, localSha, remoteRef] = m;
+    for (const h of matchText(remoteRef, terms)) report(`denylist: ref ${remoteRef} matches entry #${h.term}`);
+    if (!NO_OBJECT.test(localSha)) tips.add(localSha); // all zeros: the remote ref is being deleted
+  }
+  if (tips.size === 0) return;
+  // A push to a bare URL has no remote-tracking refs: everything reachable is checked.
+  const known = git(root, ['remote']).toString('utf8').split(/\r?\n/).includes(remote);
+  scanHistory(root, terms, report, { revs: [...tips, ...(known ? ['--not', `--remotes=${remote}`] : [])], publishing: true });
 }
 
 /**
@@ -337,6 +385,7 @@ function main(argv) {
     const root = git(process.cwd(), ['rev-parse', '--show-toplevel']).toString('utf8').replace(/\r?\n$/, '');
     if (mode === '--staged') scanStaged(root, loadedTerms, report);
     else if (mode === '--all') scanAll(root, loadedTerms, report);
+    else if (mode === '--push') scanPush(root, args[0], readPushedRefs(), loadedTerms, report);
     else scanHistory(root, loadedTerms, report);
   }
 

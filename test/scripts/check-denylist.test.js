@@ -105,7 +105,7 @@ function tempRepo() {
     return { ...r, template: fs.existsSync(seen) ? fs.readFileSync(seen, 'utf8') : '' };
   };
   const head = () => git('rev-parse', 'HEAD').trim();
-  return { dir, home, repo, git, gitRun, write, run, enableHooks, commitWithEditor, head };
+  return { dir, home, repo, env, git, gitRun, write, run, enableHooks, commitWithEditor, head };
 }
 
 const fold = (s) => s.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
@@ -523,4 +523,201 @@ test('--tarball fails closed on a file that is not a package', () => {
   assert.equal(empty.status, 1, empty.stderr);
   assert.match(empty.stderr, /the package is empty/);
   assert.equal(run(['--tarball', path.join(home, 'missing.tgz')]).status, 1);
+});
+
+const ZEROS = '0'.repeat(40);
+
+/** Adds a bare repository as the remote `origin`, and a publishing identity (the placeholder is refused). */
+function withRemote(t) {
+  const remote = path.join(t.dir, 'remote.git');
+  t.git('init', '-q', '--bare', remote);
+  t.git('remote', 'add', 'origin', remote);
+  t.git('config', 'user.email', '1+tester@users.noreply.github.com');
+  /** The remote's refs, one per line, as "<name> <sha>". */
+  const remoteRefs = () => {
+    const r = spawnSync('git', ['for-each-ref', '--format=%(refname) %(objectname)'], { cwd: remote, env: t.env, encoding: 'utf8' });
+    assert.equal(r.status, 0, r.stderr);
+    return r.stdout.trim();
+  };
+  return { remote, remoteRefs };
+}
+
+/** Runs the guard as the pre-push hook does: the remote as the argument, the pushed refs on stdin. */
+function pushCheck(t, input, remote = 'origin') {
+  return spawnSync(process.execPath, [SCRIPT, '--push', remote], { cwd: t.repo, env: t.env, input, encoding: 'utf8' });
+}
+
+test('real hooks: pre-push refuses a push that would publish a term, even one a later commit removed', () => {
+  const t = tempRepo();
+  const { remoteRefs } = withRemote(t);
+  t.write('leak.txt', 'first line\nzorbacorp was here\n');
+  t.git('add', '.');
+  t.git('commit', '-qm', 'add');
+  t.git('rm', '-q', 'leak.txt');
+  t.git('commit', '-qm', 'remove');
+  t.enableHooks();
+  // the first push: the remote is empty and there is no remote-tracking ref yet
+  const r = t.gitRun(['push', '-q', 'origin', 'HEAD:refs/heads/main']);
+  assert.notEqual(r.status, 0, 'the push should be refused');
+  assert.match(r.stderr, /denylist: history leak\.txt@[0-9a-f]{7}:2 matches entry #1/);
+  assert.match(r.stderr, /check-denylist: 1 problem\(s\) found\. Rewrite the history before pushing\./);
+  assert.equal(remoteRefs(), '');
+  assertNoLeak(r);
+});
+
+test('real hooks: pre-push checks only what the remote does not have yet, and lets a clean push through', () => {
+  const t = tempRepo();
+  const { remoteRefs } = withRemote(t);
+  t.write('old.txt', 'zorbacorp\n');
+  t.write('docs/zorbacorp-notes.md', 'clean\n');
+  t.git('add', '.');
+  t.git('commit', '-qm', 'before the guard');
+  t.git('push', '-q', 'origin', 'HEAD:refs/heads/main'); // the hooks are not enabled yet
+  t.git('rm', '-q', 'old.txt', 'docs/zorbacorp-notes.md');
+  t.write('new.txt', 'clean\n');
+  t.git('add', '.');
+  t.git('commit', '-qm', 'clean up');
+  const cleanUp = t.head();
+  t.write('new.txt', 'clean\nnow with quux-project\n');
+  t.git('commit', '-qam', 'a new leak');
+  t.enableHooks();
+
+  // Removing what the remote already has publishes none of it: neither the content nor the path.
+  const clean = t.gitRun(['push', '-q', 'origin', 'HEAD~1:refs/heads/main']);
+  assert.equal(clean.status, 0, clean.stderr);
+  assert.equal(remoteRefs(), `refs/heads/main ${cleanUp}`);
+  // A branch whose commits the remote already has, an up-to-date push and a deletion publish nothing.
+  const spare = t.gitRun(['push', '-q', 'origin', 'HEAD~1:refs/heads/spare']);
+  assert.equal(spare.status, 0, spare.stderr);
+  assert.equal(remoteRefs(), `refs/heads/main ${cleanUp}\nrefs/heads/spare ${cleanUp}`);
+  const upToDate = t.gitRun(['push', '-q', 'origin', 'HEAD~1:refs/heads/spare']);
+  assert.equal(upToDate.status, 0, upToDate.stderr);
+  const deleted = t.gitRun(['push', '-q', 'origin', ':refs/heads/spare']);
+  assert.equal(deleted.status, 0, deleted.stderr);
+  assert.equal(remoteRefs(), `refs/heads/main ${cleanUp}`);
+
+  // The next commit is checked, and it is the only one.
+  const r = t.gitRun(['push', '-q', 'origin', 'HEAD:refs/heads/main']);
+  assert.notEqual(r.status, 0, 'the push should be refused');
+  assert.match(r.stderr, /denylist: history new\.txt@[0-9a-f]{7}:2 matches entry #2/);
+  assert.match(r.stderr, /check-denylist: 1 problem\(s\) found\./);
+  assert.doesNotMatch(r.stderr, /old\.txt|notes\.md/);
+  assert.equal(remoteRefs(), `refs/heads/main ${cleanUp}`);
+  assertNoLeak(r);
+});
+
+test('real hooks: pre-push refuses commits that still carry the local placeholder e-mail', () => {
+  const t = tempRepo();
+  const { remoteRefs } = withRemote(t);
+  t.write('a.txt', 'clean\n');
+  t.git('add', '.');
+  t.git('-c', 'user.email=test@example.invalid', 'commit', '-qm', 'one');
+  const one = t.head();
+  t.git('-c', 'user.email=test@example.invalid', 'commit', '-q', '--allow-empty', '-m', 'two');
+  assert.equal(t.run(['--history']).status, 0); // the placeholder is fine until a push
+  t.enableHooks();
+  const r = t.gitRun(['push', '-q', 'origin', 'HEAD:refs/heads/main']);
+  assert.notEqual(r.status, 0, 'the push should be refused');
+  assert.match(r.stderr, /denylist: 2 commits still carry the local placeholder e-mail; rewrite the authors before publishing \(docs\/RELEASING\.md\)/);
+  assert.match(r.stderr, /check-denylist: 1 problem\(s\) found\./);
+  assert.equal(remoteRefs(), '');
+  assertNoLeak(r, ['test@example.invalid']);
+
+  const single = pushCheck(t, `refs/heads/main ${one} refs/heads/main ${ZEROS}\n`);
+  assert.equal(single.status, 1, single.stderr);
+  assert.match(single.stderr, /denylist: 1 commit still carries the local placeholder e-mail; rewrite/);
+  assertNoLeak(single, ['test@example.invalid']);
+
+  // a commit whose committer alone still carries it counts too, and every commit counts once
+  const mixed = t.gitRun(['-c', 'core.hooksPath=no-such-hooks', 'commit', '-q', '--allow-empty', '-m', 'three'],
+    { GIT_COMMITTER_EMAIL: 'test@example.invalid' });
+  assert.equal(mixed.status, 0, mixed.stderr);
+  const committer = pushCheck(t, `refs/heads/main ${t.head()} refs/heads/main ${ZEROS}\n`);
+  assert.equal(committer.status, 1, committer.stderr);
+  assert.match(committer.stderr, /denylist: 3 commits still carry the local placeholder e-mail/);
+});
+
+test('real hooks: pre-push checks a pushed annotated tag, even on a commit the remote already has', () => {
+  const t = tempRepo();
+  const { remoteRefs } = withRemote(t);
+  t.write('a.txt', 'clean\n');
+  t.git('add', '.');
+  t.git('commit', '-qm', 'start');
+  const start = t.head();
+  t.git('push', '-q', 'origin', 'HEAD:refs/heads/main');
+  t.git('tag', '-a', 'v1', '-m', 'first release');
+  t.git('tag', '-a', 'v2', '-m', 'second release, made at Zorbacorp');
+  t.git('-c', 'user.email=tagger@mail.example.com', 'tag', '-a', 'v3', '-m', 'third release');
+  t.git('tag', 'quux-project-v4'); // a lightweight tag: only its name is new
+  t.enableHooks();
+
+  const clean = t.gitRun(['push', '-q', 'origin', 'v1']);
+  assert.equal(clean.status, 0, clean.stderr);
+  const refs = `refs/heads/main ${start}\nrefs/tags/v1 ${t.git('rev-parse', 'v1').trim()}`;
+  assert.equal(remoteRefs(), refs);
+
+  const r = t.gitRun(['push', '-q', 'origin', 'v2', 'v3', 'quux-project-v4']);
+  assert.notEqual(r.status, 0, 'the push should be refused');
+  assert.match(r.stderr, /denylist: tag v2 metadata matches entry #1/);
+  assert.match(r.stderr, /denylist: tag v3 tagger e-mail is not allowed/);
+  assert.match(r.stderr, /denylist: ref refs\/tags\/\*\*\*-v4 matches entry #2/);
+  assert.match(r.stderr, /check-denylist: 3 problem\(s\) found\./);
+  assert.equal(remoteRefs(), refs);
+  assertNoLeak(r, ['tagger@mail.example.com', 'mail.example.com']);
+});
+
+test('--push checks the name of the pushed ref and needs a remote name', () => {
+  const t = tempRepo();
+  withRemote(t);
+  t.write('a.txt', 'clean\n');
+  t.git('add', '.');
+  t.git('commit', '-qm', 'one');
+  const sha = t.head();
+  const named = pushCheck(t, `refs/heads/x ${sha} refs/heads/zorbacorp-fix ${ZEROS}\n`);
+  assert.equal(named.status, 1, named.stderr);
+  assert.match(named.stderr, /denylist: ref refs\/heads\/\*\*\*-fix matches entry #1/);
+  assertNoLeak(named);
+  // the local name of the branch is not published
+  const local = pushCheck(t, `refs/heads/zorbacorp-fix ${sha} refs/heads/x ${ZEROS}\n`);
+  assert.equal(local.status, 0, local.stderr);
+  assert.equal(local.stderr, '');
+  assert.equal(pushCheck(t, '').status, 0); // nothing to push
+  for (const args of [['--push'], ['--push', ''], ['--push', 'origin', 'extra']]) {
+    const r = t.run(args);
+    assert.equal(r.status, 2, `args: ${args.join(' ')}`);
+    assert.match(r.stderr, /usage:/);
+  }
+});
+
+test('--push to a bare URL has no remote-tracking refs to rely on: everything reachable is checked', () => {
+  const t = tempRepo();
+  const { remote } = withRemote(t);
+  t.write('old.txt', 'zorbacorp\n');
+  t.git('add', '.');
+  t.git('commit', '-qm', 'one');
+  t.git('push', '-q', 'origin', 'HEAD:refs/heads/main');
+  t.git('commit', '-q', '--allow-empty', '-m', 'two');
+  const line = `refs/heads/main ${t.head()} refs/heads/main ${ZEROS}\n`;
+  assert.equal(pushCheck(t, line).status, 0);
+  const r = pushCheck(t, line, remote);
+  assert.equal(r.status, 1, r.stderr);
+  assert.match(r.stderr, /denylist: history old\.txt@[0-9a-f]{7}:1 matches entry #1/);
+  assertNoLeak(r);
+});
+
+test('--push fails closed on input it cannot use', () => {
+  const t = tempRepo();
+  withRemote(t);
+  t.write('a.txt', 'clean\n');
+  t.git('add', '.');
+  t.git('commit', '-qm', 'one');
+  const unknown = pushCheck(t, `refs/heads/x ${'1'.repeat(40)} refs/heads/x ${ZEROS}\n`);
+  assert.equal(unknown.status, 1, unknown.stderr);
+  assert.match(unknown.stderr, /^check-denylist: git rev-list failed \(exit \d+\); scan aborted\.\n$/);
+  for (const input of ['refs/heads/x\n', `refs/heads/x --all refs/heads/x ${ZEROS}\n`]) {
+    const r = pushCheck(t, input);
+    assert.equal(r.status, 1, r.stderr);
+    assert.match(r.stderr, /^check-denylist: unexpected pre-push input; nothing was approved\.\n$/);
+    assert.equal(r.stdout, '');
+  }
 });

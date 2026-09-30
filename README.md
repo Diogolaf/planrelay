@@ -13,6 +13,8 @@ Requires Node.js 22 or newer and git.
     npm test
     git config core.hooksPath .githooks   # once per clone: enables the leak guard
 
+The hooks check every commit and, before a push, everything the push would publish.
+
 The dashboard's browser tests use Playwright (a dev dependency):
 
     npm install && npx playwright install chromium   # once
