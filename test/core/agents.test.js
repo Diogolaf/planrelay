@@ -234,7 +234,7 @@ test('MCP identity: session id, then pid, then folder (§4)', () => {
   assert.equal(resolveAgentId(reg, { sessionId: 's2', folder: '/w/b' }), null);
 });
 
-test('MCP identity: the folder step runs only without a session id, and never guesses', () => {
+test('MCP identity: without a session id, the folder step decides, and never guesses', () => {
   const reg = emptyRegistry();
   touchAgent(reg, { id: 's1', folder: '/w/a' }, T0);
   assert.equal(resolveAgentId(reg, { folder: '/w/a' }), 's1');
@@ -244,6 +244,21 @@ test('MCP identity: the folder step runs only without a session id, and never gu
   assert.equal(resolveAgentId(reg, { folder: '/w/a' }), null); // two live agents there: no guess
   endAgent(reg, 's1', T0 + 2 * MIN);
   assert.equal(resolveAgentId(reg, { folder: '/w/a' }), 's2');
+});
+
+test('MCP identity: a session id whose agent ended (/clear) falls back to the folder, never to the ended agent', () => {
+  const reg = emptyRegistry();
+  // the server keeps its first session id; its pid (555) is a launcher's, not the host process's (100)
+  const server = { sessionId: 's1', pid: 555, folder: '/w/a' };
+  touchAgent(reg, { id: 's1', pid: 100, folder: '/w/a' }, T0);
+  endAgent(reg, 's1', T0 + MIN);
+  assert.equal(resolveAgentId(reg, server), null); // the new session's hooks have not run yet
+  touchAgent(reg, { id: 's2', pid: 100, folder: '/w/a' }, T0 + MIN);
+  touchAgent(reg, { id: 'elsewhere', pid: 300, folder: '/w/b' }, T0 + MIN);
+  assert.equal(resolveAgentId(reg, server), 's2');
+  touchAgent(reg, { id: 's3', pid: 400, folder: '/w/a' }, T0 + 2 * MIN);
+  assert.equal(resolveAgentId(reg, server), null); // two live agents there: no guess
+  assert.equal(reg.agents.s1.endedAt, T0 + MIN);
 });
 
 test('MCP identity: the most recently seen of two live agents sharing a pid, on the given host', () => {

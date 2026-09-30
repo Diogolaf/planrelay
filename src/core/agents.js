@@ -40,7 +40,8 @@ export function currentHost(env = process.env) {
  * The fallback assumes Claude Code starts hooks and the MCP server in exec form (`command` plus
  * `args`, as hooks/hooks.json and .mcp.json declare them), with no shell or launcher in between,
  * so the parent is the Claude Code process itself; in a real session, the parent pid of both
- * equalled the hooks' CLAUDE_PID. A launcher in between would give its own pid instead.
+ * equalled the hooks' CLAUDE_PID. A launcher in between (a Volta or Scoop shim) gives its own pid
+ * instead; resolveAgentId's folder step still finds the session after /clear.
  * Null when neither is usable; a parent of 1 or less (none, or init after the parent exited) is
  * not a session's process.
  * @param {Record<string, string | undefined>} [env] @param {number} [ppid]
@@ -244,9 +245,11 @@ export function endAgent(reg, id, now) {
  * 1. the session id, when that agent is registered and live;
  * 2. the live agent with the same pid (on the same host when q.host is given), the most recently
  *    seen one if a registry still holds several;
- * 3. only when no session id is given: the single live agent whose folder is q.folder (two or
- *    more: no guess);
- * 4. null.
+ * 3. when no session id is given, or it names an agent whose session ended: the single live agent
+ *    whose folder is q.folder (two or more: no guess). After /clear the server keeps its first
+ *    session id, and with a launcher (a Volta or Scoop shim) its pid is the launcher's, so step 2
+ *    finds nothing. An unknown session id (its hooks have not run yet) skips this step;
+ * 4. null, never the ended agent.
  * @param {Registry} reg
  * @param {{ sessionId?: string | null, pid?: number | null, host?: string | null, folder?: string | null }} q
  *   sessionId: CLAUDE_CODE_SESSION_ID; pid: the host process (hostPid()); host: currentHost();
@@ -263,7 +266,7 @@ export function resolveAgentId(reg, q, now = Date.now()) {
     const [first] = live.filter(([, a]) => a.pid === q.pid && (q.host == null || a.host === q.host)).sort((x, y) => newest(x[1], y[1]));
     if (first) return first[0];
   }
-  if (!q.sessionId && q.folder) {
+  if ((!q.sessionId || (s && !isLive(s))) && q.folder) {
     const here = live.filter(([, a]) => samePath(a.folder, q.folder));
     if (here.length === 1) return here[0][0];
   }

@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import { spawn } from 'node:child_process';
 import { PassThrough } from 'node:stream';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -217,6 +218,12 @@ function serverFor(repo, env, ppid) {
 
 /** A pid no process has. */
 const DEAD_PID = 2 ** 31 - 1;
+/** The refusal while no live agent can be matched, which /mcp fixes when it lasts. */
+const NOT_YET = 'Your session is not registered on the board yet; try again. If this keeps happening, tell the human, who can reconnect the agentboard server with /mcp.';
+
+// A launcher (Volta, Scoop shims) starts node as its own child: the server's parent pid is the
+// launcher's, not the Claude Code process's. Both are live processes; this one plays the launcher.
+const SHIM = process.ppid;
 
 // This test process plays Claude Code: its hooks get CLAUDE_PID = process.pid. Claude Code gives its
 // MCP server no CLAUDE_PID; the server is its direct child, so its parent pid is the same process.
@@ -237,7 +244,7 @@ for (const [label, env, ppid] of [
     assert.ok(Number.isFinite(endedAt));
     // only the ended agent matches: refused, and s1 stays ended
     const refused = await server.call('create_task', { title: 'Cache photos', requestedByHuman: true });
-    assert.deepEqual(refused, { content: [{ type: 'text', text: 'Your session is not registered on the board yet; try again.' }], isError: true });
+    assert.deepEqual(refused, { content: [{ type: 'text', text: NOT_YET }], isError: true });
     assert.equal(await server.text('whats_new'), 'No updates.');
     assert.equal(readRegistry(openBoard(repo)).agents.s1.endedAt, endedAt);
     hook(repo, 'SessionStart', 's3', Date.now(), process.pid, { source: 'clear' });
@@ -250,6 +257,47 @@ for (const [label, env, ppid] of [
     server.close();
   });
 }
+
+test('/clear with a launcher between Claude Code and node: the server acts as the new session, the only live one in its folder', async () => {
+  const repo = tempRepo();
+  hook(repo, 'SessionStart', 's1', Date.now(), process.pid);
+  const server = serverFor(repo, { CLAUDE_CODE_SESSION_ID: 's1' }, SHIM);
+  assert.equal(await server.text('create_task', { title: 'Filter by prep time', requestedByHuman: true }), 'Created #1 — Ready.');
+  assert.equal(lastEvent(repo).actor, 's1');
+  hook(repo, 'SessionEnd', 's1', Date.now(), process.pid, { reason: 'clear' });
+  const endedAt = readRegistry(openBoard(repo)).agents.s1.endedAt;
+  hook(repo, 'SessionStart', 's3', Date.now(), process.pid, { source: 'clear' });
+  assert.equal(await server.text('create_task', { title: 'Cache photos', requestedByHuman: true }), 'Created #2 — Ready.');
+  assert.equal(lastEvent(repo).actor, 's3');
+  assert.match(await server.text('claim_task', { id: 2 }), /^You now hold #2\./);
+  const reg = readRegistry(openBoard(repo));
+  assert.equal(readState(openBoard(repo)).tasks[2].assignee, 's3');
+  assert.equal(reg.agents.s1.endedAt, endedAt);
+  assert.equal(reg.agents.s3.endedAt, null);
+  server.close();
+});
+
+test('/clear with a launcher and a second live session in the same folder: the server does not guess', async () => {
+  const repo = tempRepo();
+  // the second terminal's Claude Code: a live process of its own
+  const other = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+  try {
+    hook(repo, 'SessionStart', 's1', Date.now(), process.pid);
+    hook(repo, 'SessionStart', 't1', Date.now(), other.pid);
+    const server = serverFor(repo, { CLAUDE_CODE_SESSION_ID: 's1' }, SHIM);
+    assert.equal(await server.text('create_task', { title: 'Filter by prep time', requestedByHuman: true }), 'Created #1 — Ready.');
+    hook(repo, 'SessionEnd', 's1', Date.now(), process.pid, { reason: 'clear' });
+    hook(repo, 'SessionStart', 's3', Date.now(), process.pid, { source: 'clear' });
+    const refused = await server.call('create_task', { title: 'Cache photos', requestedByHuman: true });
+    assert.deepEqual(refused, { content: [{ type: 'text', text: NOT_YET }], isError: true });
+    const board = openBoard(repo);
+    assert.deepEqual(Object.keys(readState(board).tasks), ['1']);
+    assert.notEqual(readRegistry(board).agents.s1.endedAt, null);
+    server.close();
+  } finally {
+    other.kill();
+  }
+});
 
 test('the server acts as the agent the hooks registered for the same host process, touching it with its own pid and host', () => {
   const repo = tempRepo();
