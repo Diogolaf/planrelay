@@ -37,7 +37,7 @@
 - **One combined review per task,** covering spec and quality. Fix what would really break.
 - **Scratch copies:** a scratch folder may hold a junction to this repository's `node_modules`. Never run `rm -rf` on a scratch folder; remove a junction with `rmdir` first.
 - **If the permission system refuses an action, stop and report it.** Don't work around it.
-- **Real Claude Code sessions cost money.** Only Task 9's controller steps start them, with the `haiku` model, and at most three full runs.
+- **Real Claude Code sessions use up the maintainer's plan limit.** Only the controller starts them, only in Task 9, with the `haiku` model: each scenario once, plus at most one retry per scenario (ten short sessions at the very most). A subagent never starts a model session: no `claude -p`, and no `claude` without a subcommand. `claude plugin validate` and `claude mcp list` make no model call and are allowed.
 
 ## Decisions taken in this plan (recorded in the spec by Task 10)
 
@@ -1089,7 +1089,7 @@ Spec §17: acceptance happens on a throwaway toy project, scripted: (1) one agen
 - Create: `test/fixtures/fake-claude.mjs`
 - Test: `test/scripts/acceptance.test.js`
 
-**Cost rule:** the implementer never starts a real `claude` session. Everything in Steps 1 to 5 runs against `test/fixtures/fake-claude.mjs`. Steps 6 and 7 belong to the controller.
+**Usage rule:** real sessions draw on the maintainer's plan limit. The implementer never starts a real `claude` session: everything in Steps 1 to 5 runs against `test/fixtures/fake-claude.mjs`. Steps 6 and 7 belong to the controller. The script itself refuses to start more than five sessions in one run (a counter in the runner, checked before every start), and every session has a 5-minute limit.
 
 **How a session is started** (from the execution notes of plans 1 and 2):
 
@@ -1184,7 +1184,7 @@ Add one line to the README's Development section: what the script is, that it st
 
 - [ ] **Step 5: Run `npm test`, then commit** with `test: scripted acceptance on a throwaway project (scripts/acceptance.mjs)`.
 
-- [ ] **Step 6 (controller): one real run.** Run `node scripts/acceptance.mjs solo --keep`, read the output and the transcripts, then `node scripts/acceptance.mjs pair --keep`. At most three full runs in total. When a check fails, decide from the transcript whether the product, the prompt or the check is wrong:
+- [ ] **Step 6 (controller): one real run.** Run `node scripts/acceptance.mjs solo --keep`, read the output and the transcripts, then `node scripts/acceptance.mjs pair --keep`. Each scenario runs once; one retry per scenario at most, and only after reading the transcript and changing something. When a check fails, decide from the transcript whether the product, the prompt or the check is wrong:
   - a product fault becomes a fix in its own commit, with a test;
   - a prompt that a small model misreads is reworded;
   - a check that is stricter than the spec is relaxed.
