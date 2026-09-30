@@ -6,7 +6,7 @@ import { claimTask, completeTask, createTask } from '../../src/core/ops.js';
 import { transact } from '../../src/core/store.js';
 import { FIXTURE_IDS as ID } from '../fixtures/recipes-app.js';
 import { HOUR } from '../helpers.js';
-import { requestTask, withDashboard } from './harness.js';
+import { layoutProblems, requestTask, withDashboard } from './harness.js';
 
 /** @typedef {import('playwright').Page} Page @typedef {import('../../src/core/store.js').Board} Board */
 
@@ -371,32 +371,7 @@ test('at 1024 px every card shows its content whole, with nothing overlapping', 
   await page.setViewportSize({ width: 1024, height: 768 });
   await openBoard(page, url);
   await page.evaluate(() => document.fonts.ready);
-  const problems = await page.evaluate(() => {
-    const out = [];
-    for (const c of document.querySelectorAll('[data-testid^="card-"]')) {
-      const box = c.getBoundingClientRect();
-      const leaves = [...c.querySelectorAll('*')].filter((e) => e.children.length === 0 && (e.textContent ?? '').trim() !== '');
-      for (const e of [c, ...c.querySelectorAll('*')]) {
-        if (e.scrollWidth > e.clientWidth + 1 && getComputedStyle(e).overflowX !== 'visible') out.push(`${c.getAttribute('data-testid')}: "${e.textContent}" is cut`);
-      }
-      const rects = leaves.map((e) => [e, e.getBoundingClientRect()]);
-      for (const [e, r] of rects) {
-        if (r.left < box.left - 0.5 || r.right > box.right + 0.5 || r.top < box.top - 0.5 || r.bottom > box.bottom + 0.5) {
-          out.push(`${c.getAttribute('data-testid')}: "${e.textContent}" sticks out`);
-        }
-      }
-      for (let i = 0; i < rects.length; i += 1) {
-        for (let j = i + 1; j < rects.length; j += 1) {
-          const [a, ra] = rects[i];
-          const [b, rb] = rects[j];
-          if (a.contains(b) || b.contains(a)) continue;
-          const overlap = Math.min(ra.right, rb.right) - Math.max(ra.left, rb.left) > 0.5 && Math.min(ra.bottom, rb.bottom) - Math.max(ra.top, rb.top) > 0.5;
-          if (overlap) out.push(`${c.getAttribute('data-testid')}: "${a.textContent}" overlaps "${b.textContent}"`);
-        }
-      }
-    }
-    return out;
-  });
+  const problems = await layoutProblems(page, '[data-testid^="card-"]');
   assert.deepEqual(problems, []);
   const width = await page.evaluate(() => document.documentElement.scrollWidth);
   assert.ok(width <= 1024, `no horizontal scroll: ${width}`);

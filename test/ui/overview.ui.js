@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { FIXTURE_IDS as ID } from '../fixtures/recipes-app.js';
 import { HOUR, MIN } from '../helpers.js';
-import { requestTask, withDashboard } from './harness.js';
+import { layoutProblems, requestTask, withDashboard } from './harness.js';
 
 /** @typedef {import('playwright').Page} Page */
 
@@ -69,6 +69,19 @@ test('Needs you: at 1024 px the question and the release time are shown whole', 
   assert.equal(await shownWhole('STALLED', 'released automatically in '), 'whole');
   const question = needsRow(page, 'QUESTION').getByTestId('needs-detail');
   assert.match(String(await question.getAttribute('title')), /^Should "quick" mean under 15 or under 30 minutes\? · asked by Jade · \d+ min ago$/);
+}));
+
+test('at 1024 px no card is cut off and nothing scrolls sideways', () => withDashboard(async ({ page, url }) => {
+  await page.setViewportSize({ width: 1024, height: 768 });
+  await openOverview(page, url);
+  await page.evaluate(() => document.fonts.ready);
+  // the panels are the cards here, Now holds one card per agent
+  const cards = ['needs-you', 'agent-card', 'shipped-today', 'epics', 'where-the-work-is', 'next-in-line']
+    .map((id) => `[data-testid="${id}"]`).join(', ');
+  assert.equal(await page.locator(cards).count(), 7); // Amber and Jade in Now
+  assert.deepEqual(await layoutProblems(page, cards), []);
+  const width = await page.evaluate(() => document.documentElement.scrollWidth);
+  assert.ok(width <= 1024, `no horizontal scroll: ${width}`);
 }));
 
 test('Needs you: "Copied" outlives a live re-render, then goes after 2 s', () => withDashboard(async ({ page, url, board, repo }) => {
