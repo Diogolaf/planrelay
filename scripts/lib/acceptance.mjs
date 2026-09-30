@@ -487,11 +487,14 @@ function inherited(events, id) {
   return release ? `#${id} was released (${release.data.reason ?? 'no reason'}) between its first claim and its completion` : '';
 }
 
-function checklistDone(t, id) {
+/**
+ * The checklist the first session set is still on the task, with the step it finished. Not every
+ * item has to be done: a session may complete its task without ticking the last step.
+ */
+function checklistKept(t, id) {
   if (!t) return `#${id} does not exist`;
-  const done = t.checklist.filter((i) => i.done).length;
   if (t.checklist.length < 2) return `its checklist has ${t.checklist.length} item${t.checklist.length === 1 ? '' : 's'}`;
-  return done === t.checklist.length ? '' : `${done} of its ${t.checklist.length} items are done`;
+  return t.checklist.some((i) => i.done) ? '' : `none of its ${t.checklist.length} items is done`;
 }
 
 /**
@@ -535,7 +538,7 @@ export function checkSolo({ board, files }) {
   return [
     check('tasks #1 and #2 were requested by the human and are Done with a summary', both([doneForHuman(state, 1), doneForHuman(state, 2)])),
     check('#2 was claimed in the first session and completed by another, with no release in between (the claim was inherited)', inherited(events, 2)),
-    check('#2 has a checklist of at least two items, all done', checklistDone(taskAt(state, 2), 2)),
+    check('#2 keeps a checklist of at least two items, at least one done', checklistKept(taskAt(state, 2), 2)),
     check('each task lists the files it touched, and they hold the work', both([1, 2].map((id) => worked(taskAt(state, id), id, SOLO_WORK[id], files)))),
     healthy(board),
   ];

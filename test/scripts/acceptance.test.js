@@ -289,7 +289,7 @@ test('checkSolo passes on the board a good run leaves, and names what is missing
   // only the first session ran
   const repo = project();
   const first = good.soloFirst({ cwd: repo, sessionId: 'solo-first', pid: process.pid, prompt: PROMPTS.soloFirst });
-  assert.deepEqual(verdicts(solo(repo)), ['#2 is In progress', '#2 was not completed', '1 of its 2 items are done', 'ok', 'ok']);
+  assert.deepEqual(verdicts(solo(repo)), ['#2 is In progress', '#2 was not completed', 'ok', 'ok', 'ok']);
 
   // the good run: the second session inherits #2 and completes it
   const second = good.soloSecond({ cwd: repo, sessionId: 'solo-second', pid: process.pid, prompt: PROMPTS.soloSecond });
@@ -297,7 +297,7 @@ test('checkSolo passes on the board a good run leaves, and names what is missing
   assert.deepEqual(checks.map((c) => c.name), [
     'tasks #1 and #2 were requested by the human and are Done with a summary',
     '#2 was claimed in the first session and completed by another, with no release in between (the claim was inherited)',
-    '#2 has a checklist of at least two items, all done',
+    '#2 keeps a checklist of at least two items, at least one done',
     'each task lists the files it touched, and they hold the work',
     'the board logged no internal error and no malformed line',
   ]);
@@ -335,18 +335,19 @@ test('checkSolo passes on the board a good run leaves, and names what is missing
     'ok',
   ]);
 
-  // one session does it all: a suggestion instead of the human's task, no checklist, no file
+  // one session does it all: a suggestion instead of the human's task, a checklist nobody touched, no file
   const alone = project();
   const a = pretendSession(alone, { sessionId: 'solo-first' });
   a.start();
   a.board('create_task', { title: 'Add a pancake recipe to recipes.md', requestedByHuman: false });
   a.board('create_task', { title: 'Add a table of contents to README.md', requestedByHuman: true });
   a.board('claim_task', { id: 2 });
+  a.board('update_task', { id: 2, checklist: [{ text: 'Add the heading', done: false }, { text: 'List the sections', done: false }] });
   a.board('complete_task', { id: 2, summary: 'Done.' });
   assert.deepEqual(verdicts(solo(alone)), [
     "#1 is an agent's suggestion, not a request of the human",
     'the session that first claimed #2 also completed it',
-    'its checklist has 0 items',
+    'none of its 2 items is done',
     '#1 lists no touched file; #2 lists no touched file',
     'ok',
   ]);
@@ -471,7 +472,7 @@ const STAND_IN = 'AGENTBOARD_ACCEPTANCE_CLAUDE replaces the claude command: no r
 const SOLO_OK = [
   '  ok      tasks #1 and #2 were requested by the human and are Done with a summary',
   '  ok      #2 was claimed in the first session and completed by another, with no release in between (the claim was inherited)',
-  '  ok      #2 has a checklist of at least two items, all done',
+  '  ok      #2 keeps a checklist of at least two items, at least one done',
   '  ok      each task lists the files it touched, and they hold the work',
   '  ok      the board logged no internal error and no malformed line',
 ];
@@ -540,7 +541,7 @@ test('the script exits 1, names what each failed check found, and keeps the proj
     '  second: ended after N s, $0.0100',
     '  FAILED  tasks #1 and #2 were requested by the human and are Done with a summary: #1 does not exist; #2 does not exist',
     '  FAILED  #2 was claimed in the first session and completed by another, with no release in between (the claim was inherited): nobody claimed #2',
-    '  FAILED  #2 has a checklist of at least two items, all done: #2 does not exist',
+    '  FAILED  #2 keeps a checklist of at least two items, at least one done: #2 does not exist',
     '  FAILED  each task lists the files it touched, and they hold the work: #1 does not exist; #2 does not exist',
     SOLO_OK[4],
     'sessions: 2 of at most 5, total cost $0.0200',

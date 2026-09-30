@@ -1146,7 +1146,7 @@ export function checkPair({ board, turns, files }) {}
 **`checkSolo`** (one agent, two sessions):
 1. tasks #1 and #2 exist, were requested by the human, and are Done with a summary;
 2. #2 was claimed in the first session and completed by a different session (another agent id), with no release in between: the claim was inherited;
-3. #2 has a checklist of at least two items, all done;
+3. #2 keeps a checklist of at least two items, at least one done (a session may complete its task without ticking the last step);
 4. each task lists at least one touched file, and those files exist with the expected words (`pancake` in `recipes.md`);
 5. the board logged no internal error (no `errors.log`) and no malformed line (`logHealth`).
 
