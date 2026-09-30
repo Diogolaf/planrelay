@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import { NAME } from '../name.js';
-import { currentHost, getAgent, nameOf, resolveAgentId, touchAgent } from '../core/agents.js';
+import { currentHost, getAgent, hostPid, nameOf, resolveAgentId, touchAgent } from '../core/agents.js';
 import { loadConfig } from '../core/config.js';
 import { COLUMN_LABELS, COLUMNS, columnOf } from '../core/derive.js';
 import { maintenance } from '../core/maintenance.js';
@@ -26,7 +26,7 @@ import { createHandler, serveStdio } from './protocol.js';
  * @typedef {import('../core/store.js').Board} Board
  * @typedef {import('../core/store.js').Registry} Registry
  * @typedef {{ sessionId?: string | null, pid?: number | null, folder: string, host?: string, now?: () => number }} Who
- *   sessionId: CLAUDE_CODE_SESSION_ID; pid: the host process (CLAUDE_PID); folder: the board's root
+ *   sessionId: CLAUDE_CODE_SESSION_ID; pid: the host process (hostPid()); folder: the board's root
  *   folder; host: currentHost() of this process
  */
 
@@ -433,15 +433,17 @@ function unavailableServer(folder, err) {
 
 /**
  * Entry point for `agentboard mcp`: serves the board of the session's project over stdio until
- * the client closes its input. Identity comes from CLAUDE_CODE_SESSION_ID and CLAUDE_PID (§4).
+ * the client closes its input. Identity comes from CLAUDE_CODE_SESSION_ID and the host process
+ * (hostPid: CLAUDE_PID, which Claude Code does not give MCP servers, else the parent process) (§4).
  * It never fails at startup: when the board cannot be opened, the server still answers, and
  * every tool says why (unavailableServer); the reason also goes to stderr, the host's MCP log.
  * @param {{ env?: Record<string, string | undefined>, cwd?: string, input?: NodeJS.ReadableStream,
- *   output?: NodeJS.WritableStream, stderr?: NodeJS.WritableStream, open?: typeof openBoard }} [opts]
- *   input, output, stderr: the process's own by default; open: openBoard (tests replace it)
+ *   output?: NodeJS.WritableStream, stderr?: NodeJS.WritableStream, open?: typeof openBoard, ppid?: number }} [opts]
+ *   input, output, stderr: the process's own by default; open: openBoard, ppid: process.ppid (tests replace them)
  */
 export function startMcpServer({
   env = process.env, cwd = process.cwd(), input = process.stdin, output = process.stdout, stderr = process.stderr, open = openBoard,
+  ppid = process.ppid,
 } = {}) {
   const folder = env.CLAUDE_PROJECT_DIR || cwd;
   let board;
@@ -455,10 +457,9 @@ export function startMcpServer({
     }
     return serveStdio(unavailableServer(folder, err), { input, output });
   }
-  const pid = Number(env.CLAUDE_PID);
   const who = {
     sessionId: env.CLAUDE_CODE_SESSION_ID || null,
-    pid: Number.isInteger(pid) && pid > 0 ? pid : null,
+    pid: hostPid(env, ppid),
     folder: board.repoRoot,
     host: currentHost(env),
   };

@@ -1,5 +1,5 @@
 import fs from 'node:fs';
-import { currentHost, endAgent, getAgent, touchAgent } from '../core/agents.js';
+import { currentHost, endAgent, getAgent, hostPid, touchAgent } from '../core/agents.js';
 import { rulesPath } from '../core/config.js';
 import { lockConflict, recordTouch } from '../core/locks.js';
 import { inheritClaim, maintenance } from '../core/maintenance.js';
@@ -30,12 +30,6 @@ const HOOK_LOCK_TIMEOUT_MS = 2000;
 const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 /** A board sequence number: a whole number of 0 or more. */
 const isSeq = (v) => Number.isSafeInteger(v) && v >= 0;
-
-/** The host process id (CLAUDE_PID), or null when it is not a whole number above 0. */
-function hostPid(env) {
-  const n = Number(env.CLAUDE_PID);
-  return Number.isInteger(n) && n > 0 ? n : null;
-}
 
 function contextOutput(event, text) {
   return text ? JSON.stringify({ hookSpecificOutput: { hookEventName: event, additionalContext: text } }) : '';
@@ -71,7 +65,7 @@ function housekeeping(board, host) {
 /** transact options for every hook write. */
 const writeOpts = ({ board, host, now }) => ({ now, timeoutMs: HOOK_LOCK_TIMEOUT_MS, before: housekeeping(board, host) });
 
-/** Registers or refreshes the calling agent. `extra` adds fields such as branch. @param {HookCall} h */
+/** Registers or refreshes the calling agent, with its host process (hostPid). `extra` adds fields such as branch. @param {HookCall} h */
 function touch(h, reg, seq, extra = {}) {
   return touchAgent(reg, { id: h.id, folder: h.folder, pid: hostPid(h.env), host: h.host, seq, ...extra }, h.now);
 }

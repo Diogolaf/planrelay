@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { openBoard, readRegistry, readState } from '../src/core/store.js';
 import { gitEnv, tempDir, tempRepo } from './helpers.js';
 
 const CLI = path.resolve('src/cli.js');
@@ -118,6 +119,33 @@ test('mcp: answers initialize and tools/list over stdio, and exits when its inpu
   assert.equal(await s.close(), 0);
   assert.equal(s.lines.length, 2);
   assert.equal(s.stderr(), '');
+});
+
+test('hook: without CLAUDE_PID the host process of the agent is the parent of the hook', () => {
+  const repo = tempRepo();
+  const r = runCli(['hook'], { input: JSON.stringify({ hook_event_name: 'SessionStart', session_id: 's1', cwd: repo }) });
+  assert.equal(r.status, 0);
+  assert.equal(readRegistry(openBoard(repo)).agents.s1.pid, process.pid);
+});
+
+test('mcp: Claude Code gives the server no CLAUDE_PID; acting for its parent process, it follows /clear to the new session', async () => {
+  // This process plays Claude Code: the hooks get CLAUDE_PID = process.pid, the server is a direct child without it.
+  const repo = tempRepo();
+  const session = (event, id, extra = {}) => assert.equal(hook(JSON.stringify({ hook_event_name: event, session_id: id, cwd: repo, ...extra })).status, 0);
+  session('SessionStart', 's1', { source: 'startup' });
+  const s = mcp({ CLAUDE_PROJECT_DIR: repo, CLAUDE_CODE_SESSION_ID: 's1' });
+  s.send(call(2, 'create_task', { title: 'Add a README', requestedByHuman: true }));
+  assert.deepEqual((await s.answer(2)).result.content, [{ type: 'text', text: 'Created #1 — Ready.' }]);
+  session('SessionEnd', 's1', { reason: 'clear' });
+  session('SessionStart', 's2', { source: 'clear' });
+  s.send(call(3, 'claim_task', { id: 1 }));
+  assert.match((await s.answer(3)).result.content[0].text, /^You now hold #1\./);
+  assert.equal(await s.close(), 0);
+  const board = openBoard(repo);
+  assert.equal(readState(board).tasks[1].assignee, 's2');
+  const { agents } = readRegistry(board);
+  assert.equal(agents.s2.pid, process.pid);
+  assert.notEqual(agents.s1.endedAt, null);
 });
 
 test('mcp: works in a project outside git', async () => {

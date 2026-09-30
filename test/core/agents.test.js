@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { emptyRegistry } from '../../src/core/store.js';
 import { DEFAULTS } from '../../src/core/config.js';
 import {
-  touchAgent, endAgent, statusOf, resolveAgentId, activeCount, nameOf, getAgent, currentHost, PALETTE,
+  touchAgent, endAgent, statusOf, resolveAgentId, activeCount, nameOf, getAgent, currentHost, hostPid, PALETTE,
 } from '../../src/core/agents.js';
 import { T0, MIN, HOUR } from '../helpers.js';
 
@@ -169,6 +169,14 @@ test('currentHost: platform, lower-case machine name and WSL distribution', () =
   assert.equal(host.split(':')[1], host.split(':')[1].toLowerCase());
   assert.ok(currentHost({}).endsWith(':'));
   assert.equal(currentHost({}), currentHost({}));
+});
+
+test('hostPid: CLAUDE_PID when usable, else the parent process (Claude Code gives MCP servers no CLAUDE_PID)', () => {
+  assert.equal(hostPid({ CLAUDE_PID: '4242' }, 77), 4242);
+  for (const bad of [undefined, '', 'abc', '0', '-5', '1.5']) assert.equal(hostPid({ CLAUDE_PID: bad }, 77), 77, String(bad));
+  // no usable parent either: no parent (0) or init after the parent exited (1)
+  for (const ppid of [0, 1, NaN, 2.5]) assert.equal(hostPid({}, ppid), null, String(ppid));
+  assert.equal(hostPid({}), process.ppid);
 });
 
 test('status: active, idle, gone', () => {

@@ -34,6 +34,25 @@ export function currentHost(env = process.env) {
 }
 
 /**
+ * The pid of the Claude Code process an agent runs in (§4 Identity), the same for its hooks and
+ * its MCP server: CLAUDE_PID when it is a whole number above 0, else `ppid`, this process's parent.
+ * Claude Code sets CLAUDE_PID for hooks but not for MCP servers (seen in Claude Code 2.1.247).
+ * The fallback assumes Claude Code starts hooks and the MCP server in exec form (`command` plus
+ * `args`, as hooks/hooks.json and .mcp.json declare them), with no shell or launcher in between,
+ * so the parent is the Claude Code process itself; in a real session, the parent pid of both
+ * equalled the hooks' CLAUDE_PID. A launcher in between would give its own pid instead.
+ * Null when neither is usable; a parent of 1 or less (none, or init after the parent exited) is
+ * not a session's process.
+ * @param {Record<string, string | undefined>} [env] @param {number} [ppid]
+ * @returns {number | null}
+ */
+export function hostPid(env = process.env, ppid = process.ppid) {
+  const n = Number(env.CLAUDE_PID);
+  if (Number.isInteger(n) && n > 0) return n;
+  return Number.isInteger(ppid) && ppid > 1 ? ppid : null;
+}
+
+/**
  * The agent with this id: a non-empty string that is an own key of the registry (never a
  * property of Object.prototype, such as "__proto__" or "toString").
  * @param {Registry} reg @param {unknown} id @returns {Agent | undefined}
@@ -230,7 +249,7 @@ export function endAgent(reg, id, now) {
  * 4. null.
  * @param {Registry} reg
  * @param {{ sessionId?: string | null, pid?: number | null, host?: string | null, folder?: string | null }} q
- *   sessionId: CLAUDE_CODE_SESSION_ID; pid: the host process (CLAUDE_PID); host: currentHost();
+ *   sessionId: CLAUDE_CODE_SESSION_ID; pid: the host process (hostPid()); host: currentHost();
  *   folder: the agent's working folder
  * @param {number} [now] caps lastSeen times from skewed clocks
  * @returns {string | null}

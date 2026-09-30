@@ -186,27 +186,70 @@ test('claim_task shows the handoff it continues from in full', () => {
   assert.ok(b.call('get_task', { id: 1 }).includes(note));
 });
 
-test('/clear in the same host process: the server acts as the new session and never revives the ended one', () => {
-  const repo = tempRepo();
-  hook(repo, 'SessionStart', 's1', T0);
-  // the server was started with the first session's id; the host process stays the same
-  const { call, clock } = toolsFor(repo, 's1', { pid: process.pid, clock: { t: T0 } });
-  call('create_task', { title: 'Filter by prep time', requestedByHuman: true });
-  assert.equal(lastEvent(repo).actor, 's1');
-  hook(repo, 'SessionEnd', 's1', T0 + MIN, process.pid, { reason: 'clear' });
-  clock.t = T0 + MIN;
-  // only the ended agent matches: refused, and s1 stays ended
-  refuses(() => call('create_task', { title: 'Cache photos', requestedByHuman: true }), /^Your session is not registered on the board yet; try again\.$/);
-  assert.equal(call('whats_new'), 'No updates.');
-  assert.equal(readRegistry(openBoard(repo)).agents.s1.endedAt, T0 + MIN);
-  hook(repo, 'SessionStart', 's3', T0 + 2 * MIN, process.pid, { source: 'clear' });
-  clock.t = T0 + 3 * MIN;
-  assert.equal(call('create_task', { title: 'Cache photos', requestedByHuman: true }), 'Created #2 — Ready.');
-  assert.equal(lastEvent(repo).actor, 's3');
-  const reg = readRegistry(openBoard(repo));
-  assert.equal(reg.agents.s1.endedAt, T0 + MIN);
-  assert.equal(reg.agents.s3.endedAt, null);
-});
+/**
+ * An MCP server started the way the plugin starts it (startMcpServer), over streams, for `repo`.
+ * `ppid` plays its parent process. call() resolves with the tool's result; text() with its text.
+ */
+function serverFor(repo, env, ppid) {
+  const input = new PassThrough();
+  const output = new PassThrough();
+  const waiting = new Map();
+  let buf = '';
+  output.on('data', (c) => {
+    buf += c.toString();
+    const parts = buf.split('\n');
+    buf = parts.pop();
+    for (const line of parts.filter(Boolean)) {
+      const m = JSON.parse(line);
+      waiting.get(m.id)?.(m.result);
+    }
+  });
+  startMcpServer({ env: { CLAUDE_PROJECT_DIR: repo, ...env }, input, output, stderr: new PassThrough(), ppid });
+  let id = 0;
+  const call = (name, args = {}) => new Promise((resolve) => {
+    id += 1;
+    waiting.set(id, resolve);
+    input.write(`${JSON.stringify({ jsonrpc: '2.0', id, method: 'tools/call', params: { name, arguments: args } })}\n`);
+  });
+  const text = async (name, args) => (await call(name, args)).content[0].text;
+  return { call, text, close: () => input.end() };
+}
+
+/** A pid no process has. */
+const DEAD_PID = 2 ** 31 - 1;
+
+// This test process plays Claude Code: its hooks get CLAUDE_PID = process.pid. Claude Code gives its
+// MCP server no CLAUDE_PID; the server is its direct child, so its parent pid is the same process.
+for (const [label, env, ppid] of [
+  ['no CLAUDE_PID, as Claude Code starts it: the parent process', {}, process.pid],
+  ['an explicit CLAUDE_PID wins over the parent process', { CLAUDE_PID: String(process.pid) }, DEAD_PID],
+]) {
+  test(`/clear in the same host process: the server acts as the new session and never revives the ended one (${label})`, async () => {
+    const repo = tempRepo();
+    hook(repo, 'SessionStart', 's1', Date.now());
+    // the server was started with the first session's id; the host process stays the same
+    const server = serverFor(repo, { CLAUDE_CODE_SESSION_ID: 's1', ...env }, ppid);
+    assert.equal(await server.text('create_task', { title: 'Filter by prep time', requestedByHuman: true }), 'Created #1 — Ready.');
+    assert.equal(lastEvent(repo).actor, 's1');
+    assert.equal(readRegistry(openBoard(repo)).agents.s1.pid, process.pid);
+    hook(repo, 'SessionEnd', 's1', Date.now(), process.pid, { reason: 'clear' });
+    const endedAt = readRegistry(openBoard(repo)).agents.s1.endedAt;
+    assert.ok(Number.isFinite(endedAt));
+    // only the ended agent matches: refused, and s1 stays ended
+    const refused = await server.call('create_task', { title: 'Cache photos', requestedByHuman: true });
+    assert.deepEqual(refused, { content: [{ type: 'text', text: 'Your session is not registered on the board yet; try again.' }], isError: true });
+    assert.equal(await server.text('whats_new'), 'No updates.');
+    assert.equal(readRegistry(openBoard(repo)).agents.s1.endedAt, endedAt);
+    hook(repo, 'SessionStart', 's3', Date.now(), process.pid, { source: 'clear' });
+    assert.equal(await server.text('create_task', { title: 'Cache photos', requestedByHuman: true }), 'Created #2 — Ready.');
+    assert.equal(lastEvent(repo).actor, 's3');
+    const reg = readRegistry(openBoard(repo));
+    assert.equal(reg.agents.s1.endedAt, endedAt);
+    assert.equal(reg.agents.s3.endedAt, null);
+    assert.equal(reg.agents.s3.pid, process.pid);
+    server.close();
+  });
+}
 
 test('the server acts as the agent the hooks registered for the same host process, touching it with its own pid and host', () => {
   const repo = tempRepo();
