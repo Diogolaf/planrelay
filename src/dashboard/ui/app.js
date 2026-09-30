@@ -20,6 +20,19 @@ import { overview } from './views/overview.js';
  * - Loads never overlap: a load asked for during one runs once more after it, so the last answer
  *   shown is never an old one.
  * - A failed load keeps what is shown; the next open, change or refresh tries again.
+ * - A load whose view differs from the last one only in `now` renders nothing.
+ *
+ * Live stream: only a visible tab holds one. The browser allows 6 connections per origin and every
+ * open stream holds one (and every open_board opens a tab), so a hidden tab closes its stream and
+ * opens it again when shown; the load on `open` catches it up.
+ *
+ * Rendering the main area (renderMain). With agents at work, live loads come every few seconds, so a
+ * render must not get in the user's way:
+ * - it waits while the user is in the middle of something in the main area: a <select> there was
+ *   pressed and has not fired change or focusout yet, or a text selection lies there. It runs when
+ *   that ends. A route change renders at once.
+ * - it keeps the focus on the element with the same `data-key`, and the scroll position of every
+ *   element with a `data-scroll-key`.
  *
  * The clock: the server's `now` at the last load plus the time since then on this browser's clock,
  * so relative times agree with the server even when it runs on a fixed clock (screenshots).
@@ -32,8 +45,12 @@ import { overview } from './views/overview.js';
  * @typedef {{ view: any, route: Route, now: number, task: TaskLoad | null }} ViewContext
  *   view: /api/view; task: on the task route only
  * @typedef {(ctx: ViewContext) => Node | Node[]} View
- *   A view returns the main area's content. It is called again on every load and every 30 s, so it
- *   keeps no state in the DOM that a render would lose. Board text goes in as text (dom.js h()).
+ *   A view returns the main area's content. It is called again on every load and every 30 s, so:
+ *   - it keeps no state in the DOM that a render would lose (a module-level map, if it must);
+ *   - its focusable elements have a stable `data-key` (such as "copy-q-m12" or "filter-epic"), and
+ *     its inner scrollers a `data-scroll-key`;
+ *   - its times are relative to the context's `now`, never Date.now().
+ *   Board text goes in as text (dom.js h()).
  */
 
 const REFRESH_MS = 60_000;
@@ -112,6 +129,12 @@ const state = {
   dismissed: null,
   /** the bad-lines count the banner shows, 0 when hidden */
   bannerCount: 0,
+  /** the last view loaded, as JSON without `now`: an equal load renders nothing */
+  viewKey: '',
+  /** a render of the main area waits for the user (see interacting) */
+  pending: false,
+  /** @type {HTMLSelectElement | null} a <select> in the main area pressed, and not yet changed or left */
+  pressedSelect: null,
 };
 
 /** @param {string} selector @returns {HTMLElement} */
@@ -182,22 +205,63 @@ function renderBanner() {
     h('button', { type: 'button', class: 'banner-dismiss', onclick: () => dismiss(project, count) }, 'Dismiss')));
 }
 
-function renderMain() {
+/** Is the user in the middle of something in the main area that a render would undo? */
+function interacting() {
+  if (state.pressedSelect?.isConnected) return true;
+  const selection = window.getSelection();
+  return selection != null && !selection.isCollapsed
+    && (els.main.contains(selection.anchorNode) || els.main.contains(selection.focusNode));
+}
+
+/**
+ * Puts `nodes` in the main area. The focus goes back to the element with the same data-key, and
+ * every [data-scroll-key] element keeps its scroll position.
+ * @param {Node[]} nodes
+ */
+function replaceMain(nodes) {
+  const active = document.activeElement;
+  const key = active instanceof HTMLElement && els.main.contains(active) ? active.dataset.key : undefined;
+  /** @type {[string, number][]} */
+  const scrolled = [...els.main.querySelectorAll('[data-scroll-key]')]
+    .map((el) => [/** @type {HTMLElement} */ (el).dataset.scrollKey ?? '', el.scrollTop]);
+  els.main.replaceChildren(...nodes);
+  for (const [scrollKey, top] of scrolled) {
+    const el = els.main.querySelector(`[data-scroll-key="${CSS.escape(scrollKey)}"]`);
+    if (el) el.scrollTop = top;
+  }
+  if (key == null) return;
+  const same = /** @type {HTMLElement | null} */ (els.main.querySelector(`[data-key="${CSS.escape(key)}"]`));
+  same?.focus({ preventScroll: true });
+}
+
+/** @param {boolean} [force] render even while the user is interacting (a route change) */
+function renderMain(force = false) {
+  if (!force && interacting()) {
+    state.pending = true;
+    return;
+  }
+  state.pending = false;
   const { view, route } = state;
-  if (!view) return void els.main.replaceChildren(h('div', { class: 'page' }, h('p', { class: 'page-note' }, 'Loading the board')));
+  if (!view) return void replaceMain([h('div', { class: 'page' }, h('p', { class: 'page-note' }, 'Loading the board'))]);
   try {
     const out = VIEWS[route.name]({ view, route, now: now(), task: route.name === 'task' ? state.task : null });
-    els.main.replaceChildren(...[out].flat());
+    replaceMain([out].flat());
   } catch (err) {
     console.error(err);
-    els.main.replaceChildren(h('div', { class: 'page' }, h('p', { class: 'page-note' }, 'This view could not be shown. Reload the page to try again.')));
+    replaceMain([h('div', { class: 'page' }, h('p', { class: 'page-note' }, 'This view could not be shown. Reload the page to try again.'))]);
   }
 }
 
-function render() {
+/** Runs the render that waited for the user, once they are done. */
+function flush() {
+  if (state.pending && !interacting()) renderMain();
+}
+
+/** @param {boolean} [force] see renderMain */
+function render(force = false) {
   renderHeader();
   renderBanner();
-  renderMain();
+  renderMain(force);
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -237,13 +301,17 @@ async function getJson(path) {
 }
 
 const loadView = serial(async () => {
+  let view;
   try {
-    const view = await getJson('/api/view');
-    state.view = view;
-    state.offset = Number.isFinite(view.now) ? view.now - Date.now() : 0;
+    view = await getJson('/api/view');
   } catch {
     return; // offline, or a failed answer: keep what is shown
   }
+  state.view = view;
+  state.offset = Number.isFinite(view.now) ? view.now - Date.now() : 0;
+  const key = JSON.stringify({ ...view, now: 0 });
+  if (key === state.viewKey) return; // nothing new: the 30 s render keeps the times fresh
+  state.viewKey = key;
   render();
 });
 
@@ -278,8 +346,13 @@ function setConn(conn) {
   renderHeader();
 }
 
+/** @type {EventSource | null} this tab's event stream; null while the tab is hidden */
+let stream = null;
+
 function connect() {
+  if (stream || document.hidden) return;
   const events = new EventSource('/api/events');
+  stream = events;
   events.addEventListener('open', () => {
     setConn('live');
     refresh();
@@ -288,9 +361,34 @@ function connect() {
   events.addEventListener('error', () => {
     setConn('offline');
     // The browser retries by itself while the stream is CONNECTING; once CLOSED it has given up.
-    if (events.readyState === EventSource.CLOSED) setTimeout(connect, RECONNECT_MS);
+    if (events.readyState === EventSource.CLOSED && stream === events) {
+      stream = null;
+      setTimeout(connect, RECONNECT_MS);
+    }
   });
 }
+
+// A hidden tab gives its stream back, and takes one again when shown (see the top of this file).
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) return connect();
+  stream?.close();
+  stream = null;
+  setConn('connecting');
+});
+
+// A render waits while a <select> in the main area is open, or text there is selected (renderMain).
+els.main.addEventListener('pointerdown', (e) => {
+  const select = e.target instanceof Element ? e.target.closest('select') : null;
+  if (select) state.pressedSelect = select;
+});
+for (const type of ['change', 'focusout']) {
+  els.main.addEventListener(type, (e) => {
+    if (e.target !== state.pressedSelect) return;
+    state.pressedSelect = null;
+    flush();
+  });
+}
+document.addEventListener('selectionchange', flush);
 
 // ------------------------------------------------------------------------------------------------
 // Routing and search
@@ -306,7 +404,7 @@ function onRoute() {
     loadTask();
   }
   if (document.activeElement !== els.search) els.search.value = route.name === 'board' ? route.params.q ?? '' : '';
-  render();
+  render(true);
   if (prev.name !== route.name || prev.id !== route.id) window.scrollTo(0, 0);
 }
 
@@ -321,4 +419,4 @@ onRoute();
 loadView();
 connect();
 setInterval(refresh, REFRESH_MS);
-setInterval(renderMain, TICK_MS);
+setInterval(() => renderMain(), TICK_MS);
