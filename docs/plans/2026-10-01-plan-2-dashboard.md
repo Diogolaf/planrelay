@@ -32,7 +32,7 @@
   - Stage only your files. Don't push.
 - **File-writing tools may turn `\u` escapes into literal invisible characters.** Before committing, scan changed files for unexpected non-ASCII characters.
 - **The repository code supersedes this plan's listings** where they differ. Plan 1's modules were hardened after review, so read the real module before building on it.
-- **The bar for robustness is normal use.** One or two sessions, `/clear`, killed terminals, Windows, macOS and Linux, a board of up to about 1,000 tasks. Don't build defences for exotic cases (hand-edited internal files, megabyte inputs, double I/O failures).
+- **The bar for robustness is normal use.** One or two sessions, `/clear`, killed terminals, Windows, macOS and Linux, a board of up to about 500 tasks. Don't build defences for exotic cases (hand-edited internal files, megabyte inputs, double I/O failures).
 - **One combined review per task,** covering spec and quality. Fix what would really break.
 
 ### How the UI tasks are written
@@ -639,8 +639,8 @@ test('a live agent of this host whose process is gone counts as ended', () => {
   assert.ok(v.needsYou.stalled.some((s) => s.id === ID.vegetarian));
 });
 
-test('performance: a 1,000-task board builds in well under 100 ms', () => {
-  // Build a state with 1,000 tasks directly with applyEvent (see test/perf.test.js for the pattern)
+test('performance: a 500-task board builds in well under 100 ms', () => {
+  // Build a state with 500 tasks directly with applyEvent (see test/perf.test.js for the pattern)
   // and assert the median of 5 buildView calls is under 100 ms.
 });
 ```

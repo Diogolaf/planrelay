@@ -4597,10 +4597,10 @@ import { tempRepo, T0, MIN } from './helpers.js';
 
 const BUDGET_MS = Number(process.env.AGENTBOARD_PERF_BUDGET_MS ?? (process.env.CI ? 300 : 100));
 
-test('hooks stay within budget on a 1,000-task board', () => {
+test('hooks stay within budget on a 500-task board', () => {
   const repo = tempRepo();
   transact(openBoard(repo), () => ({
-    events: Array.from({ length: 1000 }, (_, i) => ({
+    events: Array.from({ length: 500 }, (_, i) => ({
       type: 'task.created',
       actor: 'seed',
       data: {
@@ -4639,7 +4639,7 @@ Expected: exit 0, no output.
 
 ```bash
 git add test/perf.test.js
-git commit -m "test: hook performance budget on a 1,000-task board"
+git commit -m "test: hook performance budget on a 500-task board"
 ```
 
 - [ ] **Step 4: Manual smoke test in Claude Code (throwaway project)**

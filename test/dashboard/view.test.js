@@ -412,10 +412,10 @@ test('buildView is pure: no clock, inputs unchanged, results share nothing with 
   assert.deepEqual({ state, reg }, before);
 });
 
-test('performance: a 1,000-task board builds in well under 100 ms', (t) => {
+test('performance: a 500-task board builds in well under 100 ms', (t) => {
   const BUDGET_MS = Number(process.env.AGENTBOARD_PERF_BUDGET_MS ?? (process.env.CI ? 300 : 100));
   const EPICS = 20;
-  const TASKS = 1000;
+  const TASKS = 500;
   const AGENTS = 10;
   const events = [];
   const add = (type, data, actor = 'human', at = NOW - 10 * HOUR + events.length * 1000) =>

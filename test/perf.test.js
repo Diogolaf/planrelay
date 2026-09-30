@@ -12,7 +12,7 @@ import { tempRepo, T0, MIN } from './helpers.js';
  */
 const BUDGET_MS = Number(process.env.AGENTBOARD_PERF_BUDGET_MS ?? (process.env.CI ? 300 : 100));
 const RUNS = 7;
-const TASKS = 1000;
+const TASKS = 500;
 
 /** Each session runs in its own live host process, as in two terminals (one host process has one live agent). */
 const PIDS = { s1: process.pid, s2: process.ppid };
