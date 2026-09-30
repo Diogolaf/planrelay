@@ -38,7 +38,8 @@ import { watchBoard } from './watch.js';
  *   logged; build: replaces buildView (tests); heartbeatMs: the event stream's comment heartbeat.
  * @typedef {http.Server & { notify: (seq: number) => void, endEvents: () => void, readonly eventClients: number }} DashboardServer
  *   notify: sends `event: change` with the board's seq to every event stream (the watcher calls it);
- *   endEvents: ends every event stream; eventClients: how many are open.
+ *   endEvents: ends every event stream; eventClients: how many are open. The server emits
+ *   'eventclients' with that number whenever it changes.
  */
 
 export const CSP = "default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; "
@@ -194,9 +195,10 @@ export function createDashboardServer({
     const beat = setInterval(() => push(res, ': heartbeat\n\n'), heartbeatMs);
     beat.unref();
     clients.add(res);
+    server.emit('eventclients', clients.size);
     res.on('close', () => {
       clearInterval(beat);
-      clients.delete(res);
+      if (clients.delete(res)) server.emit('eventclients', clients.size);
     });
     push(res, `retry: ${RETRY_MS}\n\n`);
   };
@@ -249,8 +251,10 @@ export function createDashboardServer({
     for (const res of clients) push(res, chunk);
   };
   const endEvents = () => {
+    const had = clients.size;
     for (const res of clients) res.end();
     clients.clear();
+    if (had) server.emit('eventclients', 0);
   };
   Object.assign(server, { notify, endEvents });
   Object.defineProperty(server, 'eventClients', { get: () => clients.size });

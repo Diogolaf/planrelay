@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import http from 'node:http';
+import os from 'node:os';
 import path from 'node:path';
 import { writeJsonAtomic } from '../../src/core/fsx.js';
 import { openBoard } from '../../src/core/store.js';
@@ -52,15 +53,16 @@ function fakeIo(onSpawn = (_child) => {}) {
 
 const record = (board, rec) => writeJsonAtomic(dashboardFile(board), rec);
 
-test('ensureDashboard starts a detached dashboard, waits for its dashboard.json and opens its URL; a second call reuses it', () => {
+test('ensureDashboard starts a detached dashboard that stops when idle, waits for its dashboard.json and opens its URL; a second call reuses it', () => {
   const board = openBoard(tempRepo());
   const io = fakeIo((child) => record(board, { pid: child.pid, port: PORT, startedAt: 1, board: boardId(board) }));
   assert.deepEqual(ensureDashboard(board, io), { url: DASH_URL, reused: false });
   assert.equal(io.spawned.length, 1);
   assert.deepEqual(io.spawned[0], {
     command: process.execPath,
-    args: [CLI, 'dashboard', '--dir', board.repoRoot, '--no-open'],
-    options: { detached: true, stdio: 'ignore', windowsHide: true },
+    args: [CLI, 'dashboard', '--dir', board.repoRoot, '--no-open', '--idle-exit', '30'],
+    // not in the project folder, which it would keep from being renamed or moved
+    options: { detached: true, stdio: 'ignore', windowsHide: true, cwd: os.homedir() },
   });
   assert.equal(io.children[0].unrefed, true);
   assert.ok(io.children[0].listenerCount('error') > 0); // a failed start never crashes the MCP server
@@ -201,4 +203,58 @@ test('on exit, dashboard.json is removed only while it still names this process'
   await waitFor(() => proc.exits.length > 0);
   assert.deepEqual(JSON.parse(fs.readFileSync(dashboardFile(board), 'utf8')), other);
   await assert.rejects(ping(started.url));
+});
+
+/** Opens /api/events of a started dashboard; resolves once the stream has begun, with close(). @param {string} url */
+function openEvents(url) {
+  const { port } = new URL(url);
+  return new Promise((resolve, reject) => {
+    const req = http.get({ host: '127.0.0.1', port, path: '/api/events', headers: { host: `127.0.0.1:${port}` }, agent: false }, (res) => {
+      res.once('data', () => resolve({ close: () => req.destroy() }));
+    });
+    req.on('error', reject);
+  });
+}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+test('with idleMs and no browser connected, the dashboard stops by itself and removes its record', async () => {
+  const board = openBoard(tempRepo());
+  const proc = fakeProc();
+  const started = await serveDashboard(board, { proc, idleMs: 150 });
+  assert.ok(fs.existsSync(dashboardFile(board)));
+  await waitFor(() => proc.exits.length > 0);
+  assert.deepEqual(proc.exits, [0]);
+  assert.equal(fs.existsSync(dashboardFile(board)), false);
+  await assert.rejects(ping(started.url));
+});
+
+test('with idleMs, an open event stream keeps the dashboard up; the idle time counts from when the last one closes', async () => {
+  const board = openBoard(tempRepo());
+  const proc = fakeProc();
+  const started = await serveDashboard(board, { proc, idleMs: 200 });
+  const first = await openEvents(started.url);
+  const second = await openEvents(started.url);
+  await sleep(400);
+  first.close();
+  await sleep(400);
+  assert.deepEqual(proc.exits, []); // one stream is still open
+  assert.deepEqual(await ping(started.url), { app: 'agentboard', board: boardId(board) });
+  const closedAt = Date.now();
+  second.close();
+  await waitFor(() => proc.exits.length > 0);
+  assert.ok(Date.now() - closedAt >= 150, `stopped ${Date.now() - closedAt} ms after the last stream closed`);
+  assert.equal(fs.existsSync(dashboardFile(board)), false);
+  await assert.rejects(ping(started.url));
+});
+
+test('without idleMs, a dashboard with no browser connected keeps running', async () => {
+  const board = openBoard(tempRepo());
+  const proc = fakeProc();
+  const started = await serveDashboard(board, { proc });
+  await sleep(300);
+  assert.deepEqual(proc.exits, []);
+  assert.deepEqual(await ping(started.url), { app: 'agentboard', board: boardId(board) });
+  proc.emit('SIGTERM');
+  await waitFor(() => proc.exits.length > 0);
 });

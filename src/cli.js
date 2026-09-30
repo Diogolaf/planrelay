@@ -7,15 +7,16 @@ import { NAME } from './name.js';
  *   Fail-open: it always exits 0 and never throws, whatever the input.
  * - `mcp`: the agent tools (§8) over stdio, for the session's project.
  * - `repair`: rebuilds every snapshot from the event log (§6) of the board of the current folder.
- * - `dashboard [--port N] [--dir PATH] [--no-open]`: serves the dashboard (§13) of the board of
- *   PATH, else of the current folder, until Ctrl+C, and opens it in the browser. A dashboard already
+ * - `dashboard [--port N] [--dir PATH] [--no-open] [--idle-exit MINUTES]`: serves the dashboard
+ *   (§13) of the board of PATH, else of the current folder, until Ctrl+C (or, with --idle-exit, until
+ *   no browser tab has been on it for that long), and opens it in the browser. A dashboard already
  *   running for that board is reused: its URL is printed (and opened), and the command exits.
  *
  * Each command loads only the modules it needs, so a hook call does not pay for the MCP server.
  */
 
 const USAGE = `usage: ${NAME} <hook|mcp|repair|dashboard>`;
-const DASHBOARD_USAGE = `usage: ${NAME} dashboard [--port N] [--dir PATH] [--no-open]`;
+const DASHBOARD_USAGE = `usage: ${NAME} dashboard [--port N] [--dir PATH] [--no-open] [--idle-exit MINUTES]`;
 /** repair names at most this many skipped lines. */
 const LINES_NAMED = 20;
 
@@ -74,20 +75,28 @@ async function repairCommand() {
 
 /**
  * The options of `dashboard`, or null when they are not usable: an unknown option, an argument,
- * or a port that is not a whole number from 0 to 65535.
- * @param {string[]} args @returns {Promise<{ port: number, dir: string | undefined, open: boolean } | null>}
+ * a port that is not a whole number from 0 to 65535, or an idle time that is not a number of minutes
+ * above 0 (decimals allowed).
+ * @param {string[]} args
+ * @returns {Promise<{ port: number, dir: string | undefined, open: boolean, idleMs: number | null } | null>}
  */
 async function dashboardOptions(args) {
   const { parseArgs } = await import('node:util');
   let values;
   try {
-    ({ values } = parseArgs({ args, options: { port: { type: 'string' }, dir: { type: 'string' }, 'no-open': { type: 'boolean' } } }));
+    ({ values } = parseArgs({
+      args, options: { port: { type: 'string' }, dir: { type: 'string' }, 'no-open': { type: 'boolean' }, 'idle-exit': { type: 'string' } },
+    }));
   } catch {
     return null;
   }
   const port = values.port === undefined ? 0 : /^\d{1,5}$/.test(values.port) ? Number(values.port) : NaN;
   if (!(port <= 65535)) return null;
-  return { port, dir: values.dir, open: values['no-open'] !== true };
+  const minutes = values['idle-exit'];
+  // at most 4 digits: a timer longer than 24.8 days would fire at once
+  const idleMs = minutes === undefined ? null : /^\d{1,4}(\.\d{1,6})?$/.test(minutes) ? Number(minutes) * 60_000 : NaN;
+  if (idleMs !== null && !(idleMs > 0)) return null;
+  return { port, dir: values.dir, open: values['no-open'] !== true, idleMs };
 }
 
 async function dashboardCommand(args) {
@@ -103,7 +112,7 @@ async function dashboardCommand(args) {
   try {
     if (opts.dir !== undefined && !fs.statSync(opts.dir, { throwIfNoEntry: false })?.isDirectory()) throw new Error(`${opts.dir} is not a folder`);
     const board = opts.dir !== undefined ? openBoard(opts.dir) : openBoard(process.cwd(), { projectDir: process.env.CLAUDE_PROJECT_DIR });
-    const { url, reused } = await serveDashboard(board, { port: opts.port });
+    const { url, reused } = await serveDashboard(board, { port: opts.port, idleMs: opts.idleMs });
     console.log(reused
       ? `${NAME} dashboard for ${board.projectName} is already running: ${url}`
       : `${NAME} dashboard for ${board.projectName}: ${url} (Ctrl+C to stop)`);

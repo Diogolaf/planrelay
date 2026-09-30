@@ -250,9 +250,37 @@ test('dashboard: serves the board until stopped, records itself in dashboard.jso
   }
 });
 
-test('dashboard: a bad --port, an unknown option or a folder that does not exist prints why and exits 1', () => {
-  const usage = /^usage: agentboard dashboard \[--port N\] \[--dir PATH\] \[--no-open\]\n$/;
-  for (const args of [['--port', 'abc'], ['--port', '70000'], ['--port', '-1'], ['--port', '80.5'], ['--port'], ['--verbose'], ['extra']]) {
+test('dashboard --idle-exit: with no browser connected, it stops by itself, cleanly, and removes dashboard.json', async () => {
+  const repo = tempRepo();
+  const board = openBoard(repo);
+  const file = path.join(board.dir, 'dashboard.json');
+  // 0.01 minutes: 600 ms
+  const child = spawn(process.execPath, [CLI, 'dashboard', '--no-open', '--dir', repo, '--idle-exit', '0.01'], { env: childEnv() });
+  let out = '';
+  let err = '';
+  child.stdout.on('data', (c) => { out += c.toString(); });
+  child.stderr.on('data', (c) => { err += c.toString(); });
+  const exited = new Promise((resolve) => child.on('exit', (code) => resolve(code)));
+  const timer = setTimeout(() => child.kill(), 10000);
+  try {
+    await waitFor(() => out.includes('\n') || err !== '');
+    assert.match(out, /^agentboard dashboard for .+: http:\/\/127\.0\.0\.1:\d+\/ \(Ctrl\+C to stop\)\n$/, err);
+    assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).pid, child.pid);
+    assert.equal(await exited, 0, err);
+    assert.equal(fs.existsSync(file), false);
+  } finally {
+    clearTimeout(timer);
+    child.kill();
+  }
+});
+
+test('dashboard: a bad --port or --idle-exit, an unknown option or a folder that does not exist prints why and exits 1', () => {
+  const usage = /^usage: agentboard dashboard \[--port N\] \[--dir PATH\] \[--no-open\] \[--idle-exit MINUTES\]\n$/;
+  const bad = [
+    ['--port', 'abc'], ['--port', '70000'], ['--port', '-1'], ['--port', '80.5'], ['--port'], ['--verbose'], ['extra'],
+    ['--idle-exit', '0'], ['--idle-exit', 'soon'], ['--idle-exit', '-5'], ['--idle-exit', '99999'], ['--idle-exit'],
+  ];
+  for (const args of bad) {
     const r = runCli(['dashboard', '--no-open', ...args], { cwd: tempRepo(), timeout: 10000 });
     assert.equal(r.status, 1, args.join(' '));
     assert.match(r.stderr, usage, args.join(' '));

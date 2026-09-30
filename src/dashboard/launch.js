@@ -1,5 +1,6 @@
 import childProcess from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { NAME } from '../name.js';
 import { readJson, sleepSync, writeJsonAtomic } from '../core/fsx.js';
@@ -24,6 +25,11 @@ const CLI = path.join(import.meta.dirname, '..', 'cli.js');
 /** How long ensureDashboard waits for a new dashboard, and how often it looks. */
 const START_TIMEOUT_MS = 5_000;
 const START_POLL_MS = 100;
+/**
+ * A dashboard that open_board starts stops after this many minutes without a browser tab on it
+ * (no event stream open), so it neither lingers until reboot nor keeps the project folder busy.
+ */
+const IDLE_EXIT_MINUTES = 30;
 const DETACHED = Object.freeze({ detached: true, stdio: 'ignore', windowsHide: true });
 
 /** @param {Board} board */
@@ -86,7 +92,9 @@ export function openBrowser(url, { spawn = childProcess.spawn, platform = proces
  * The dashboard of `board`, opened in the browser, for open_board. Synchronous, like MCP tool
  * handlers. A live recorded dashboard is reused; otherwise `agentboard dashboard` is started for
  * the board's folder, detached and without output, so it outlives this process and never writes to
- * the MCP server's stdout, and this waits up to 5 s for it to record itself.
+ * the MCP server's stdout, and this waits up to 5 s for it to record itself. That dashboard runs in
+ * the home folder, not the project's (a process's folder cannot be renamed or moved on Windows), and
+ * stops after IDLE_EXIT_MINUTES without a browser tab on it.
  * @param {Board} board
  * @param {{ spawn?: typeof childProcess.spawn, open?: (url: string) => void, sleep?: (ms: number) => void,
  *   now?: () => number, alive?: (pid: number) => boolean }} [io] tests replace them
@@ -98,7 +106,8 @@ export function ensureDashboard(board, { spawn = childProcess.spawn, open = open
     open(running.url);
     return { url: running.url, reused: true };
   }
-  const child = spawn(process.execPath, [CLI, 'dashboard', '--dir', board.repoRoot, '--no-open'], { ...DETACHED });
+  const args = [CLI, 'dashboard', '--dir', board.repoRoot, '--no-open', '--idle-exit', String(IDLE_EXIT_MINUTES)];
+  const child = spawn(process.execPath, args, { ...DETACHED, cwd: os.homedir() });
   child.on('error', () => {}); // a start that fails is reported by the timeout below
   child.unref();
   const end = now() + START_TIMEOUT_MS;
@@ -119,14 +128,17 @@ export function ensureDashboard(board, { spawn = childProcess.spawn, open = open
 
 /**
  * The `dashboard` command's work: reuses the live dashboard of the board, or starts one in this
- * process and records it in dashboard.json. SIGINT and SIGTERM close the server and exit with code
- * 0; the record is removed then and at any exit, while it still names this process.
+ * process and records it in dashboard.json. SIGINT and SIGTERM stop it: the record is removed
+ * (while it still names this process, as at any exit), the server closed, and the process exits
+ * with code 0. With `idleMs`, it also stops once no event stream (a browser tab) has been open for
+ * that long, counted from the start or from when the last one closed.
  * @param {Board} board
- * @param {{ port?: number, proc?: Proc, now?: () => number, alive?: (pid: number) => boolean }} [opts]
- *   port: 0 (default) for a free one; proc: `process` (tests pass a stand-in)
+ * @param {{ port?: number, idleMs?: number | null, proc?: Proc, now?: () => number, alive?: (pid: number) => boolean }} [opts]
+ *   port: 0 (default) for a free one; idleMs: null (default) to run until stopped; proc: `process`
+ *   (tests pass a stand-in)
  * @returns {Promise<{ url: string, reused: boolean }>}
  */
-export async function serveDashboard(board, { port = 0, proc = process, now = Date.now, alive = pidAlive } = {}) {
+export async function serveDashboard(board, { port = 0, idleMs = null, proc = process, now = Date.now, alive = pidAlive } = {}) {
   const running = runningDashboard(board, alive);
   if (running) return { url: running.url, reused: true };
   const { boardId, startDashboard } = await import('./server.js');
@@ -139,14 +151,29 @@ export async function serveDashboard(board, { port = 0, proc = process, now = Da
     throw err;
   }
   let stopping = false;
+  /** @type {NodeJS.Timeout | null} */
+  let idle = null;
   const stop = () => {
     if (stopping) return;
     stopping = true;
+    if (idle) clearTimeout(idle);
     forgetDashboard(board, pid);
     dash.close().then(() => proc.exit(0));
   };
   proc.on('SIGINT', stop);
   proc.on('SIGTERM', stop);
   proc.on('exit', () => forgetDashboard(board, pid));
+  if (idleMs != null) {
+    /** @param {number} clients the open event streams */
+    const count = (clients) => {
+      if (idle) clearTimeout(idle);
+      idle = null;
+      if (clients > 0 || stopping) return;
+      idle = setTimeout(stop, idleMs);
+      idle.unref(); // the server keeps the process alive, not this timer
+    };
+    dash.server.on('eventclients', count);
+    count(dash.server.eventClients);
+  }
   return { url: dash.url, reused: false };
 }
