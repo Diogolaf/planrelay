@@ -191,6 +191,8 @@ The dashboard's browser tests use Playwright, kept in its own development packag
 
 `npm run screenshots` takes the screenshots in `docs/design/` again, from the recipes-app test data. It needs `npm run setup:ui` too.
 
+`node scripts/acceptance.mjs [solo|pair|all]` runs the scripted acceptance: two scenarios on a throwaway recipes-app project in the temp folder, then checks on the board they leave. It starts real Claude Code sessions on your own account, so their usage counts against your plan: five short sessions for both scenarios (two for `solo`, three for `pair`), with the `haiku` model unless `--model` names another. `--keep` keeps the project and the transcripts.
+
 The leak guard reads private terms from `~/.agentboard-dev/denylist.txt` (one term per line, `#` for comments; in CI, the `AGENTBOARD_DENYLIST` secret). The list is never committed, and matches are reported by entry number only.
 Prefer single distinctive words over full paths; if you do list path fragments, add both the `\` and `/` forms. Save the list as UTF-8 (or UTF-16 with a BOM).
 
