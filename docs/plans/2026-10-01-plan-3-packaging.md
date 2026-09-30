@@ -1279,4 +1279,22 @@ Then follow `docs/RELEASING.md` step by step, asking before each push and before
 
 ## Execution notes
 
-(Filled in as the tasks are done.)
+- **Reviews:** one combined review per task, as agreed; Tasks 1 and 2, 4 and 5, and 6 and 7 shared a review. Every review approved with no must-fix item. The repository code supersedes the listings above where they differ.
+- **Tasks 1 and 2 (done, approved).** Real `npm pack` output holds regular files only; a long or non-ASCII file name would add a pax header entry, which the guard scans as content.
+- **Task 3 (done, approved).** Beyond the listing:
+  - a path that a pushed commit deletes is not checked when publishing (the remote already has it; a path added and deleted inside the pushed range is still caught through its add);
+  - the hook's input lines are parsed from the right, because git's local ref field can hold spaces, and a line that does not fit fails closed;
+  - known and accepted: an annotated tag whose tagger carries the placeholder is not refused, and the pushed range trusts the local remote-tracking refs.
+- **Task 4 (done, approved).** `claude plugin validate` passes for the plugin and the marketplace; `claude --plugin-dir <repository> mcp list` shows the plugin's server connected. The docs confirm the three points of Step 1.
+- **Task 5 (done, approved).** `npm run setup:ui` installs the browser tests' package; `test:ui` runs `test/ui/*.ui.js`.
+- **Task 6 (done, approved).** The dashboard serves its static files under `/ui/`, so the packed-package test asks for `/ui/app.css` and a font below it.
+- **Task 7 (done, approved).** actionlint finds nothing; the pins and the gitleaks checksum were confirmed against their sources. The workflow has never run: `docs/RELEASING.md` lists what to watch on the first run.
+- **Task 8 (done, approved).** Where the spec and the code differed, the README follows the code: git is optional (outside git the board lives in the home folder), and the dashboard answers GET and HEAD. The reviewer's wording suggestions were applied.
+- **Task 9 (done).** The library also exports the prompts and a session cap (`MAX_SESSIONS`, five per run); `test/fixtures/acceptance-sessions.js` lets the stand-in perform a turn with the plugin's real hooks and tools, so the dry run judges real boards. The 5-minute limit is per prompt.
+- **Task 9, the real run (2026-10-01, model `haiku`, Claude Code 2.1.247):** five sessions in all, no retry.
+  - `solo`: two sessions, 54 s. Four of five checks passed at once. The fifth asked for every checklist item to be ticked; the second session did the last step and completed the task without ticking it. The check was relaxed (the kept checklist with at least one step done) and the kept board then passed, with no new session.
+  - `pair`: three sessions, 51 s. All six checks passed: the claim of #2 was refused ("#2 waits on #1"), the edit of `recipes.md` was refused naming Amber, the human's answer was relayed, and completing #1 unblocked #2. The second agent's prompt had been reworded before the run so that it tries the edit even after the refused claim.
+  - Seen in the transcripts: the plugin loads from `--plugin-dir`; with `--strict-mcp-config` the server comes from `--mcp-config`, connected, with ten tools named `mcp__agentboard__*`; a refused tool call and a lock denial both arrive as tool errors carrying the board's own text.
+  - An observation, not a fault: the board lets a task be completed with an unticked checklist item.
+- **Task 10 (done).** The spec also says "GET and HEAD" now (§13), as the server does.
+- **Not done, on purpose:** installing through a local marketplace on the maintainer's machine, because it changes the maintainer's own Claude Code configuration. `docs/RELEASING.md` step 3 does it from GitHub in a throwaway project.

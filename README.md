@@ -201,7 +201,7 @@ Prefer single distinctive words over full paths; if you do list path fragments, 
     npm run check:pack      # packs the npm package and runs the leak guard over it
     npm run check:history   # the leak guard over every commit, tag and ref
 
-The design is in [docs/specs/2026-09-29-v1-design.md](docs/specs/2026-09-29-v1-design.md). The steps of a release will be in `docs/RELEASING.md`.
+The design is in [docs/specs/2026-09-29-v1-design.md](docs/specs/2026-09-29-v1-design.md). The steps of a release are in [docs/RELEASING.md](docs/RELEASING.md).
 
 ## License
 
