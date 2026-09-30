@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { openBoard, readState, readRegistry, emptyRegistry } from '../../src/core/store.js';
 import { DEFAULTS } from '../../src/core/config.js';
 import { applyEvent, emptyState, RECENT_LIMIT } from '../../src/core/reduce.js';
-import { buildView, withDeadEnded, SHOWN_ACTIVITY } from '../../src/dashboard/view.js';
+import { buildView, withDeadEnded, SHOWN_ACTIVITY, UNKNOWN_COLOR } from '../../src/dashboard/view.js';
 import { buildRecipesBoard, FIXTURE_IDS as ID } from '../fixtures/recipes-app.js';
 import { tempRepo, MIN, HOUR } from '../helpers.js';
 
@@ -137,6 +137,15 @@ test('cards: blockers, stalled chip and meta per column', () => {
   assert.deepEqual(card(ID.favorites).epicIds, []);
   assert.equal(card(ID.favorites).epicPath, '');
   assert.equal(card(ID.cachePhotos).assignee, null);
+});
+
+test('Done cards carry who completed them; the holder stays the assignee', () => {
+  const v = fixtureView();
+  const card = (id) => v.cards.find((c) => c.id === id);
+  assert.deepEqual(card(ID.byIngredient).completer, { name: 'Jade', color: '#17735A' });
+  assert.deepEqual(card(ID.rounding).completer, { name: 'Amber', color: '#A45F00' });
+  assert.equal(card(ID.byIngredient).assignee, null); // agent filters follow the holder, not the completer
+  assert.ok(v.cards.filter((c) => c.column !== 'done').every((c) => c.completer === null));
 });
 
 test('cards come in board order: column, then rank; Done newest first', () => {
@@ -320,6 +329,10 @@ test('Shipped today starts at midnight; the completer from the stored name, then
   const v = viewOf(state, regOf(agent('ag-a', 'Plum')));
   assert.deepEqual(v.shippedToday.map((s) => [s.id, s.agentName, s.doneAt, s.summary]), [[3, 'Jade', NOW - MIN, null], [2, 'Plum', MIDNIGHT, 'At midnight.']]);
   assert.deepEqual(v.cards.map((c) => c.id), [3, 2, 1]); // Done: newest first
+  // the completer: the stored name, then the registry's; gray when the registry no longer knows the agent
+  assert.deepEqual(v.cards.map((c) => c.completer), [
+    { name: 'Jade', color: UNKNOWN_COLOR }, { name: 'Plum', color: '#4F6B1F' }, { name: 'Amber', color: '#4F6B1F' },
+  ]);
 });
 
 test('buildView is pure: no clock, inputs unchanged, results share nothing with them', () => {

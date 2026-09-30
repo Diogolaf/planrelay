@@ -33,7 +33,7 @@ import { displayName } from '../core/reduce.js';
  *   checklist: Progress | null, lastFile: string | null, blockedReason: string | null, lastActivityAt: number | null }} AgentCard
  * @typedef {{ id: number, title: string, column: Column, suggested: boolean, labels: string[], firstLabel: string | null,
  *   epicPath: string, epicIds: number[], assignee: { id: string, name: string, color: string } | null,
- *   stalled: { since: number } | null, blockers: Blocker[], meta: Meta | null, rank: number, doneAt: number | null,
+ *   completer: { name: string, color: string } | null, stalled: { since: number } | null, blockers: Blocker[], meta: Meta | null, rank: number, doneAt: number | null,
  *   updatedAt: number | null }} Card
  * @typedef {{
  *   project: string, now: number, seq: number, badLines: number, activeCount: number, agents: AgentCard[],
@@ -165,6 +165,8 @@ export function withDeadEnded(reg, { host, alive, now }) {
  *   In progress, the checklist and last activity; Blocked, the first open dependency ("back to …
  *   when #N closes"), else the holder's progress, else null; Done, the completion time. A stalled
  *   card's progress leaves out the time: its "No agent for …" chip already shows it.
+ *   assignee: the current holder (agent filters follow it); completer: on Done cards only, who
+ *   completed the task (the stored name, then the registry's), for the card's avatar.
  * - activity: the activity ring, newest first (entries of one event keep their order), shown kinds only.
  * @param {{ state: BoardState, reg: Registry, cfg: Config, now: number, midnight: number, projectName: string,
  *   badLines: number, host: string | null, alive: (pid: number) => boolean }} input
@@ -272,6 +274,9 @@ export function buildView({ state, reg: stored, cfg, now, midnight, projectName,
         epicPath: epicPath(t, tasks),
         epicIds: epicIdsOf(t, tasks),
         assignee: held ? { id: /** @type {string} */ (t.assignee), name: holderName(reg, t), color: colorOf(reg, t.assignee) } : null,
+        completer: column === 'done'
+          ? { name: writtenBy(reg, t.completedBy, t.completedByName), color: colorOf(reg, t.completedBy) }
+          : null,
         stalled: gone ? { since: lastActivity(t, reg) } : null,
         blockers: chips,
         meta,
