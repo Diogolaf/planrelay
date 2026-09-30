@@ -2,7 +2,7 @@ import { getAgent, nameOf, statusOf } from '../core/agents.js';
 import { COLUMN_LABELS, columnOf } from '../core/derive.js';
 import { getTask } from '../core/queries.js';
 import { FILES_LIMIT, RECENT_LIMIT } from '../core/reduce.js';
-import { SHOWN_ACTIVITY, UNKNOWN_COLOR, withDeadEnded } from './view.js';
+import { colorOf, SHOWN_ACTIVITY, withDeadEnded } from './view.js';
 
 /**
  * The dashboard's task view model (§13 Task view): what one task's page renders, as one JSON-ready
@@ -14,8 +14,8 @@ import { SHOWN_ACTIVITY, UNKNOWN_COLOR, withDeadEnded } from './view.js';
  * - Names (§4), as in view.js: built on getTask, so the holder shows the registry's name, then the
  *   name stored with the claim; history (creator, message authors, completer) shows the name
  *   stored with the event first; "an earlier agent" when no name is known. Avatar colors come from
- *   the registry, UNKNOWN_COLOR when it no longer knows the agent. A raw agent id is never used as
- *   a name; it only appears as `assignee.id`.
+ *   the registry, UNKNOWN_COLOR when it no longer knows the agent (view.js colorOf). A raw agent
+ *   id is never used as a name; it only appears as `assignee.id`.
  * - The human's words: the task's creation when the human asked for it, and messages an agent
  *   relayed (relayedFromHuman), read as author "You" with `relayedBy` the relaying agent's name.
  *
@@ -57,12 +57,6 @@ const TAGS = Object.freeze({ comment: 'COMMENT', answer: 'ANSWER', handoff: 'HAN
 
 /** A task by id; never matches inherited keys. */
 const taskOf = (tasks, id) => (Object.hasOwn(tasks, id) ? tasks[id] : undefined);
-
-/** An agent's avatar color from the registry, gray when the registry does not know it. */
-function colorOf(reg, id) {
-  const color = getAgent(reg, id)?.color;
-  return typeof color === 'string' ? color : UNKNOWN_COLOR;
-}
 
 /** The ancestor epics of a task, outermost first: through epics only, at any depth, cycle-safe (like epicPath). */
 function breadcrumbOf(t, tasks) {
@@ -144,7 +138,7 @@ const refOf = (o, tasks) => ({ id: o.id, title: o.title, column: columnOf(o, tas
  * @returns {TaskView | null}
  */
 export function buildTaskView({ state, reg: stored, cfg, now, id, messages = [], host, alive }) {
-  const reg = withDeadEnded(stored, { host, alive, now });
+  const reg = withDeadEnded(stored, { host, alive, now, cfg });
   const t = getTask(state, reg, id, messages);
   if (!t) return null;
   const { tasks } = state;

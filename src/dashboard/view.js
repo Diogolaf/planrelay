@@ -74,11 +74,28 @@ const holderName = (reg, t) => displayName(getAgent(reg, t.assignee)?.name) ?? d
 /** A history name: the one stored with the event, else the registry's (nameOf: "system", "an earlier agent"). */
 const writtenBy = (reg, id, name) => displayName(name) ?? nameOf(reg, id);
 
-/** An agent's avatar color from the registry, gray when the registry does not know it. */
-function colorOf(reg, id) {
+/**
+ * An agent's avatar color from the registry, UNKNOWN_COLOR when the registry does not know it.
+ * @param {Registry} reg @param {unknown} id @returns {string}
+ */
+export function colorOf(reg, id) {
   const color = getAgent(reg, id)?.color;
   return typeof color === 'string' ? color : UNKNOWN_COLOR;
 }
+
+/**
+ * The Now card's file: the agent's last edited file, unless it was edited before its current claim
+ * began (a previous task's file). Kept when a time is unknown, and when the agent holds no task.
+ * @returns {string | null}
+ */
+function lastFileOf(a, task) {
+  if (typeof a.lastFile !== 'string') return null;
+  const since = task?.claim?.since;
+  return Number.isFinite(since) && Number.isFinite(a.lastFileAt) && a.lastFileAt < since ? null : a.lastFile;
+}
+
+/** Arrival time for the Now order; agents without a usable one come last. */
+const arrival = (a) => (Number.isFinite(a.firstSeen) ? a.firstSeen : Infinity);
 
 /** Checklist progress, null when the task has no checklist. @returns {Progress | null} */
 function checklistOf(t) {
@@ -138,24 +155,30 @@ const doneTime = (t) => (Number.isFinite(t.doneAt) ? t.doneAt : -Infinity);
 const byText = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 
 /**
- * The registry as the dashboard sees it: a live agent of this host whose process no longer exists
- * counts as ended now, which housekeeping records at its next write (§10). Returns a copy; `reg`
- * is not changed (agents that stay live are shared with it, so treat the copy as read-only).
+ * The registry as the dashboard sees it: a live agent counts as ended now when housekeeping would
+ * end it at its next write (§10, maintenance.js): its process on this host no longer exists, or it
+ * has not been seen for claimTimeoutHours (lastSeen, else firstSeen; on any host). Returns a copy;
+ * `reg` is not changed (agents that stay live are shared with it, so treat the copy as read-only).
  * @param {Registry} reg
- * @param {{ host: string | null, alive: (pid: number) => boolean, now: number }} io
+ * @param {{ host: string | null, alive: (pid: number) => boolean, now: number, cfg: Config }} io
  * @returns {Registry}
  */
-export function withDeadEnded(reg, { host, alive, now }) {
+export function withDeadEnded(reg, { host, alive, now, cfg }) {
+  const timeoutMs = cfg.claimTimeoutHours * 3_600_000;
   const agents = Object.fromEntries(Object.entries(reg.agents).map(([id, a]) => {
-    const dead = a.endedAt == null && host != null && a.host === host && Number.isInteger(a.pid) && a.pid > 0 && !alive(a.pid);
-    return [id, dead ? { ...a, endedAt: now } : a];
+    if (a.endedAt != null) return [id, a];
+    const deadHere = host != null && a.host === host && Number.isInteger(a.pid) && a.pid > 0 && !alive(a.pid);
+    const seen = [a.lastSeen, a.firstSeen].find(Number.isFinite) ?? -Infinity;
+    return [id, deadHere || !(now - seen <= timeoutMs) ? { ...a, endedAt: now } : a];
   }));
   return { ...reg, agents };
 }
 
 /**
  * The view model of the Overview, the Board, the Activity feed and the header (see View).
- * - agents: live agents (not ended in the effective registry), most recently seen first.
+ * - agents: live agents (not ended in the effective registry), in order of arrival (firstSeen,
+ *   oldest first; the id breaks ties), so cards keep their places as hooks refresh lastSeen.
+ *   lastFile: see lastFileOf.
  * - needsYou: questions to the human, suggestions to approve (one grouped row), stalled claims (needsHuman).
  * - shippedToday: done at or after `midnight`, newest first.
  * - epics: top-level epics by rank, each followed by its sub-epics by rank; an epic whose parent
@@ -174,7 +197,7 @@ export function withDeadEnded(reg, { host, alive, now }) {
  * @returns {View}
  */
 export function buildView({ state, reg: stored, cfg, now, midnight, projectName, badLines, host, alive }) {
-  const reg = withDeadEnded(stored, { host, alive, now });
+  const reg = withDeadEnded(stored, { host, alive, now, cfg });
   const { tasks } = state;
   const all = Object.values(tasks);
   const columns = new Map(all.map((t) => [t.id, columnOf(t, tasks)]));
@@ -183,7 +206,7 @@ export function buildView({ state, reg: stored, cfg, now, midnight, projectName,
   /** @type {AgentCard[]} */
   const agents = Object.entries(reg.agents)
     .filter(([, a]) => a.endedAt == null)
-    .sort(([, x], [, y]) => (Number.isFinite(y.lastSeen) ? y.lastSeen : 0) - (Number.isFinite(x.lastSeen) ? x.lastSeen : 0))
+    .sort(([xId, x], [yId, y]) => arrival(x) - arrival(y) || byText(xId, yId))
     .map(([id, a]) => {
       const name = displayName(a.name) ?? UNKNOWN;
       const status = /** @type {'active' | 'idle'} */ (statusOf(a, now, cfg));
@@ -198,7 +221,7 @@ export function buildView({ state, reg: stored, cfg, now, midnight, projectName,
         pill: status === 'idle' ? 'Idle' : !task ? 'No task' : blocked ? 'Blocked' : 'In progress',
         task: task ? { id: task.id, title: task.title } : null,
         checklist: task ? checklistOf(task) : null,
-        lastFile: typeof a.lastFile === 'string' ? a.lastFile : null,
+        lastFile: lastFileOf(a, task),
         blockedReason: blocked ? blockedReason(chipsOf(task)) : null,
         lastActivityAt: task ? lastActivity(task, reg) : Number.isFinite(a.lastSeen) ? a.lastSeen : null,
       };

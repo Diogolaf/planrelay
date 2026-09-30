@@ -1,7 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { openBoard, readState, readRegistry, emptyRegistry } from '../../src/core/store.js';
+import { openBoard, readState, readRegistry, emptyRegistry, transact } from '../../src/core/store.js';
+import { getAgent, touchAgent } from '../../src/core/agents.js';
 import { DEFAULTS } from '../../src/core/config.js';
+import { claimTask, completeTask, touchTaskFile } from '../../src/core/ops.js';
 import { applyEvent, emptyState, RECENT_LIMIT } from '../../src/core/reduce.js';
 import { buildView, withDeadEnded, SHOWN_ACTIVITY, UNKNOWN_COLOR } from '../../src/dashboard/view.js';
 import { buildRecipesBoard, FIXTURE_IDS as ID } from '../fixtures/recipes-app.js';
@@ -90,6 +92,7 @@ test('Now: one card per live agent with its task, checklist, pill and last file'
   assert.equal(jade.lastFile, null);
   assert.equal(jade.checklist, null); // no checklist on #6
   assert.equal(v.agents.some((a) => a.name === 'Cobalt'), false);
+  assert.deepEqual(v.agents.map((a) => a.name), ['Amber', 'Jade']); // order of arrival
 });
 
 test('Shipped today, epics, next in line, labels', () => {
@@ -179,13 +182,13 @@ test('a live agent of this host whose process is gone counts as ended', () => {
   const board = openBoard(repo);
   const reg = readRegistry(board);
   for (const a of Object.values(reg.agents)) { a.host = 'h1'; a.pid = a.name === 'Amber' ? 111 : 222; }
-  const eff = withDeadEnded(reg, { host: 'h1', alive: (pid) => pid !== 111, now: NOW });
+  const eff = withDeadEnded(reg, { host: 'h1', alive: (pid) => pid !== 111, now: NOW, cfg: DEFAULTS });
   const amber = Object.values(eff.agents).find((a) => a.name === 'Amber');
   assert.equal(amber.endedAt, NOW);
   assert.equal(Object.values(reg.agents).find((a) => a.name === 'Amber').endedAt, null); // input untouched
   assert.equal(Object.values(eff.agents).find((a) => a.name === 'Jade').endedAt, null); // alive
   // another host's pids mean nothing here
-  const other = withDeadEnded(reg, { host: 'h2', alive: () => false, now: NOW });
+  const other = withDeadEnded(reg, { host: 'h2', alive: () => false, now: NOW, cfg: DEFAULTS });
   assert.equal(Object.values(other.agents).every((a) => a.name === 'Cobalt' || a.endedAt === null), true);
   const v = buildView({ state: readState(board), reg, cfg: DEFAULTS, now: NOW, midnight: MIDNIGHT, projectName: 'p',
     badLines: 0, host: 'h1', alive: (pid) => pid !== 111 });
@@ -193,6 +196,48 @@ test('a live agent of this host whose process is gone counts as ended', () => {
   assert.equal(v.activeCount, 1);
   assert.ok(v.needsYou.stalled.some((s) => s.id === ID.vegetarian && s.holderName === 'Amber'));
   assert.ok(v.cards.find((c) => c.id === ID.vegetarian).stalled);
+});
+
+test('a live agent not seen for claimTimeoutHours counts as ended, on any host', () => {
+  const repo = tempRepo();
+  buildRecipesBoard(repo, { now: NOW });
+  const board = openBoard(repo);
+  const reg = readRegistry(board);
+  const due = NOW - 2 * MIN + DEFAULTS.claimTimeoutHours * HOUR; // Amber and Jade were last seen 2 min before NOW
+  const endedAt = (now) => Object.fromEntries(Object.values(withDeadEnded(reg, { host: null, alive: () => true, now, cfg: DEFAULTS }).agents)
+    .map((a) => [a.name, a.endedAt]));
+  const cobaltEnded = Object.values(reg.agents).find((a) => a.name === 'Cobalt').endedAt;
+  assert.deepEqual(endedAt(due), { Amber: null, Jade: null, Cobalt: cobaltEnded }); // exactly the timeout: still live
+  assert.deepEqual(endedAt(due + 1), { Amber: due + 1, Jade: due + 1, Cobalt: cobaltEnded });
+  // Now empties, and the cards' stalled chips agree with Needs you
+  const v = buildView({ state: readState(board), reg, cfg: DEFAULTS, now: due + HOUR, midnight: MIDNIGHT, projectName: 'p',
+    badLines: 0, host: null, alive: () => true });
+  assert.deepEqual([v.agents, v.activeCount], [[], 0]);
+  assert.deepEqual(v.needsYou.stalled.map((s) => [s.id, s.holderName]), [[ID.vegetarian, 'Amber'], [ID.prepTime, 'Jade'], [ID.photoUpload, 'Cobalt']]);
+  assert.deepEqual(v.cards.filter((c) => c.stalled).map((c) => c.id).sort((a, b) => a - b), [ID.vegetarian, ID.prepTime, ID.photoUpload]);
+});
+
+test('Now: the last file shows only when it was edited during the current claim', () => {
+  const repo = tempRepo();
+  const board = buildRecipesBoard(repo, { now: NOW });
+  const amber = 'fixture-amber';
+  const op = (fn, input, at) => transact(board, (state, reg, now) => {
+    touchAgent(reg, { id: amber, folder: repo, seq: state.seq }, now);
+    return { events: fn({ state, reg, cfg: DEFAULTS, agentId: amber, now }, input).events, registry: reg };
+  }, { now: at });
+  const card = (now) => buildView({ state: readState(board), reg: readRegistry(board), cfg: DEFAULTS, now, midnight: MIDNIGHT,
+    projectName: 'p', badLines: 0, host: null, alive: () => true }).agents.find((a) => a.name === 'Amber');
+  op(completeTask, { id: ID.vegetarian, summary: 'Done.' }, NOW + MIN);
+  assert.deepEqual([card(NOW + MIN).task, card(NOW + MIN).lastFile], [null, 'src/filters/diet.js']); // no task: the last file stays
+  op(claimTask, { id: ID.passwordReset }, NOW + 2 * MIN);
+  assert.deepEqual([card(NOW + 2 * MIN).task.id, card(NOW + 2 * MIN).lastFile], [ID.passwordReset, null]); // #5's file is not #7's
+  // her first edit on #7, recorded as the PostToolUse hook does
+  transact(board, (state, reg, now) => {
+    const { events } = touchTaskFile({ state, reg, cfg: DEFAULTS, agentId: amber, now }, 'src/auth/reset.js');
+    Object.assign(getAgent(reg, amber), { lastSeen: now, lastFile: 'src/auth/reset.js', lastFileAt: now });
+    return { events, registry: reg };
+  }, { now: NOW + 3 * MIN });
+  assert.equal(card(NOW + 3 * MIN).lastFile, 'src/auth/reset.js');
 });
 
 // ---------- edge rules on hand-built states ----------
@@ -285,19 +330,23 @@ test('a card blocked only by a question and held by nobody has no meta', () => {
   assert.equal(v.cards[0].meta, null);
 });
 
-test('Now: idle and taskless agents, most recent first, ended agents left out', () => {
+test('Now: idle and taskless agents in order of arrival, ended agents left out', () => {
   const state = stateOf([created(1, { title: 'Held' }), claimed(1, 'ag-idle')]);
   const reg = regOf(
-    agent('ag-idle', 'Jade', { lastSeen: NOW - HOUR }),
-    agent('ag-free', 'amber', { lastSeen: NOW - 3 * MIN }),
-    agent('ag-ended', 'Cobalt', { lastSeen: NOW - MIN, endedAt: NOW - MIN }),
+    agent('ag-late', 'Teal', { firstSeen: NOW - 2 * HOUR, lastSeen: NOW - 30 * MIN }),
+    agent('ag-free', 'amber', { firstSeen: NOW - 2 * HOUR, lastSeen: NOW - 3 * MIN }),
+    agent('ag-idle', 'Jade', { firstSeen: NOW - 3 * HOUR, lastSeen: NOW - HOUR }),
+    agent('ag-ended', 'Cobalt', { firstSeen: NOW - 4 * HOUR, lastSeen: NOW - MIN, endedAt: NOW - MIN }),
   );
   const v = viewOf(state, reg);
-  assert.deepEqual(v.agents.map((a) => [a.name, a.status, a.pill]), [['amber', 'active', 'No task'], ['Jade', 'idle', 'Idle']]);
-  const free = v.agents[0];
+  // firstSeen, oldest first; the id breaks the tie; being seen later never moves a card
+  assert.deepEqual(v.agents.map((a) => [a.name, a.status, a.pill]), [['Jade', 'idle', 'Idle'], ['amber', 'active', 'No task'], ['Teal', 'idle', 'Idle']]);
+  reg.agents['ag-late'].lastSeen = NOW;
+  assert.deepEqual(viewOf(state, reg).agents.map((a) => a.name), ['Jade', 'amber', 'Teal']);
+  const free = v.agents[1];
   assert.deepEqual([free.id, free.initial, free.task, free.checklist, free.blockedReason, free.lastFile], ['ag-free', 'A', null, null, null, null]);
   assert.equal(free.lastActivityAt, NOW - 3 * MIN);
-  assert.deepEqual(v.agents[1].task, { id: 1, title: 'Held' });
+  assert.deepEqual(v.agents[0].task, { id: 1, title: 'Held' });
   assert.equal(v.activeCount, 1);
 });
 
