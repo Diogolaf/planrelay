@@ -69,8 +69,10 @@
   --offline: #8A867D;
   --logo-soft: #C9C5BB;
   --on-agent: #FFFFFF;        /* initials on an agent's color */
+  --on-col: #FFFFFF;          /* a mark on a column color: the checklist's check */
   --you-bg: #1D1C1A;          /* the human's avatar */
   --you-text: #FFFFFF;
+  --system-line: #C9C5BB;     /* the system's avatar ring */
 }
 
 @media (prefers-color-scheme: dark) {
@@ -116,8 +118,10 @@
     --offline: #7C786F;
     --logo-soft: #5A5750;
     --on-agent: #FFFFFF;
+    --on-col: #161513;
     --you-bg: #ECEAE4;
     --you-text: #1D1C1A;
+    --system-line: #5A5750;
   }
 }
 
@@ -287,6 +291,9 @@ button, input, select { font: inherit; color: inherit; }
 .tone-accent { background: var(--accent-soft); color: var(--accent-text); }
 .tone-warn { background: var(--warn-soft); color: var(--warn-text); }
 .tone-neutral { background: var(--track); color: var(--text-2); }
+.tone-ready { background: var(--ready-soft); color: var(--ready-text); }
+.tone-done { background: var(--done-soft); color: var(--done-text); }
+.tone-quiet { background: var(--bg); color: var(--muted); }
 
 /* "#12 Title": the id in monospace, the title in the text color; underlined on hover */
 .task-id { font-family: var(--font-mono); font-weight: 500; color: var(--muted); }
@@ -735,4 +742,159 @@ button, input, select { font: inherit; color: inherit; }
   .column, .lane-cell { padding: 10px 8px; }
   .card { padding: 10px; }
   .filter-text { max-width: 160px; }
+}
+
+/* ------------------------------------------------------------------------------------------------
+ * Avatars of the task view (the agent's color comes from --agent-color)
+ * ---------------------------------------------------------------------------------------------- */
+
+.avatar-md { width: 28px; height: 28px; border-radius: 14px; font-size: 12px; }
+.avatar-lg { width: 32px; height: 32px; border-radius: 16px; font-size: 14px; }
+.avatar-you { background: var(--you-bg); color: var(--you-text); }
+.avatar-system { background: var(--surface); border: 1.5px solid var(--system-line); color: var(--muted); }
+
+/* ------------------------------------------------------------------------------------------------
+ * Activity (views/activity.js)
+ * ---------------------------------------------------------------------------------------------- */
+
+.activity {
+  width: 100%;
+  max-width: 960px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 24px;
+  line-height: normal;
+}
+.activity-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; }
+.activity-links { font-size: 14px; color: var(--muted); overflow-wrap: anywhere; }
+.activity-links .task-link { font-weight: 600; }
+.activity-empty { margin: 0; padding: 18px 22px; font-size: 14px; color: var(--muted); }
+.ev-list { display: flex; flex-direction: column; padding: 4px 22px; }
+.ev-row { display: flex; align-items: flex-start; gap: 12px; padding: 12px 0; border-top: 1px solid var(--divider); }
+.ev-row:first-child { border-top: 0; }
+.ev-body { flex-grow: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.ev-line { font-size: 14px; line-height: 1.4; color: var(--text-2); overflow-wrap: anywhere; }
+.ev-actor { font-weight: 600; color: var(--text); }
+.ev-line .task-link { font-weight: 600; }
+.ev-detail { font-size: 13.5px; line-height: 1.45; color: var(--muted); overflow-wrap: anywhere; }
+.ev-when { flex-shrink: 0; margin-left: auto; padding-top: 1px; font-size: 13px; color: var(--muted); white-space: nowrap; }
+
+/* the dot: solid for the step that moves a task on, a ring for its counterpart; the column colors */
+.ev-dot { width: 10px; height: 10px; flex-shrink: 0; margin-top: 4px; border-radius: 5px; background: var(--faint); }
+.ev-created { background: var(--col-backlog); }
+.ev-approved { background: var(--col-ready); }
+.ev-claimed { background: var(--col-in-progress); }
+.ev-question { background: var(--col-blocked); }
+.ev-completed { background: var(--col-done); }
+.ev-suggested, .ev-unblocked, .ev-dependencies-done, .ev-released, .ev-auto-released, .ev-answer, .ev-checked { background: none; border: 2px solid var(--faint); }
+.ev-suggested { border-color: var(--col-backlog); }
+.ev-unblocked, .ev-dependencies-done { border-color: var(--col-ready); }
+.ev-released, .ev-auto-released { border-color: var(--col-in-progress); }
+.ev-answer { border-color: var(--col-blocked); }
+.ev-checked { border-color: var(--col-done); }
+
+/* ------------------------------------------------------------------------------------------------
+ * Task view (views/task.js)
+ * ---------------------------------------------------------------------------------------------- */
+
+.task-page {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 32px;
+  align-items: start;
+  padding: 26px 40px;
+  line-height: normal; /* the mockup's; long text sets its own */
+}
+.task-main { grid-column: span 8; min-width: 0; display: flex; flex-direction: column; gap: 22px; }
+.task-side { grid-column: span 4; min-width: 0; display: flex; flex-direction: column; gap: 18px; }
+
+/* top: breadcrumb, title, meta row */
+.task-top { display: flex; flex-direction: column; gap: 10px; }
+.crumbs { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-size: 13px; color: var(--muted); }
+.crumbs a { text-decoration: none; overflow-wrap: anywhere; }
+.crumbs a:hover { text-decoration: underline; }
+.task-title { margin: 0; font-size: 28px; font-weight: 700; line-height: 1.2; overflow-wrap: anywhere; }
+.task-title-id { font-family: var(--font-mono); font-size: 24px; font-weight: 500; color: var(--muted); }
+.task-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; font-size: 13px; }
+.status-pill { padding: 4px 10px; border-radius: 6px; font-weight: 700; }
+.task-agent { display: flex; align-items: center; gap: 6px; color: var(--text-2); }
+.label-chip { max-width: 100%; padding: 3px 8px; border: 1px solid var(--border); border-radius: 6px; color: var(--text-2); overflow-wrap: anywhere; }
+.task-origin { color: var(--muted); }
+
+/* the question to the human */
+.callout { display: flex; gap: 14px; padding: 16px 18px; background: var(--warn-tint); border: 1px solid var(--warn-line); border-radius: 12px; }
+.callout-body { flex-grow: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.callout-head { margin: 0; font-size: 12px; font-weight: 700; letter-spacing: 0.05em; color: var(--warn-text); }
+.callout-text { margin: 0; font-size: 15.5px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.callout-ask { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.callout-ask-label { font-size: 13px; color: var(--muted); }
+.callout-request {
+  min-width: 0;
+  max-width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 4px 4px 10px;
+  background: var(--surface);
+  border: 1px solid var(--warn-line);
+  border-radius: 8px;
+}
+
+/* the main column's sections */
+.task-section { display: flex; flex-direction: column; gap: 8px; }
+.task-h2 { margin: 0; font-size: 16px; font-weight: 700; }
+.task-h2-note { font-size: 14px; font-weight: 500; color: var(--muted); }
+.task-description { margin: 0; font-size: 15px; line-height: 1.55; color: var(--text-body); white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.checklist { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; }
+.check-item { display: flex; align-items: flex-start; gap: 10px; font-size: 14.5px; line-height: 1.4; color: var(--text); overflow-wrap: anywhere; }
+.check-item.is-done { color: var(--text-2); }
+.check-box {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1.5px solid var(--faint);
+  border-radius: 5px;
+}
+.is-done .check-box { background: var(--col-done); border-color: var(--col-done); color: var(--on-col); }
+
+.conversation { gap: 4px; }
+.conversation .task-h2 { margin-bottom: 8px; }
+.entry { display: flex; gap: 12px; padding: 12px 0; border-top: 1px solid var(--border); }
+.entry-body { flex-grow: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.entry-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-size: 13px; }
+.entry-author { font-size: 14px; font-weight: 600; }
+.entry-tag { padding: 1px 7px; border-radius: 5px; font-size: 11px; font-weight: 700; letter-spacing: 0.04em; }
+.entry-when { color: var(--muted); }
+.entry-text { margin: 0; font-size: 14.5px; line-height: 1.5; color: var(--text-body); white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* the sidebar's cards */
+.side-card { display: flex; flex-direction: column; gap: 8px; padding: 16px 18px; }
+.side-card-title { margin: 0; font-size: 15px; font-weight: 700; }
+.side-card-note { font-weight: 500; color: var(--muted); }
+.details { margin: 0; display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 10px 12px; font-size: 14px; }
+.details dt { color: var(--muted); }
+.details dd { margin: 0; font-weight: 500; overflow-wrap: anywhere; }
+.deps-group { display: flex; flex-direction: column; gap: 4px; padding-top: 2px; }
+.deps-rel { font-size: 12px; font-weight: 700; letter-spacing: 0.05em; color: var(--muted); }
+.dep-row { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+.dep-link { min-width: 0; font-weight: 600; }
+.dep-pill { flex-shrink: 0; margin-left: auto; padding: 2px 8px; border-radius: 6px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+.file-row { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; }
+.file-path { min-width: 0; font-family: var(--font-mono); overflow-wrap: anywhere; }
+.file-who { flex-shrink: 0; color: var(--muted); }
+.link-row { font-size: 14px; overflow-wrap: anywhere; }
+.side-link { font-size: 14px; overflow-wrap: anywhere; }
+.link-host { font-size: 13px; color: var(--muted); }
+.link-path { font-size: 13px; }
+
+/* below 1200 px: less padding, so the sidebar keeps its room at 1024 px */
+@media (max-width: 1199px) {
+  .task-page { gap: 24px; padding: 20px 24px; }
+  .activity { padding: 20px 16px; }
 }

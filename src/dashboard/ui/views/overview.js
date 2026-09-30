@@ -1,3 +1,4 @@
+import { copyButton } from '../copy.js';
 import { h, icon } from '../dom.js';
 import { askLine, duration, plural, timeAgo } from '../format.js';
 
@@ -7,17 +8,11 @@ import { askLine, duration, plural, timeAgo } from '../format.js';
  *
  * The app builds it again on every load and every 30 s, so it keeps no state in the DOM:
  * - every focusable element has a stable `data-key`, so focus survives a render (app.js);
- * - a copy button's "Copied" confirmation lives in `copiedAt`, by the button's key, so the next
- *   render shows it for the rest of its 2 s;
+ * - a copy button's "Copied" confirmation outlives a render (copy.js);
  * - board times are relative to the view's `now`.
  *
  * @typedef {import('../app.js').ViewContext} ViewContext
  */
-
-/** How long a copy button reads "Copied". */
-const COPIED_MS = 2_000;
-/** When each copy button last copied, by its data-key (this browser's clock). */
-const copiedAt = new Map();
 
 /** The columns of "Where the work is", in board order: [key in view.counts, label]. */
 const COLUMNS = [['backlog', 'Backlog'], ['ready', 'Ready'], ['in_progress', 'In progress'], ['blocked', 'Blocked'], ['done', 'Done']];
@@ -48,56 +43,14 @@ function bar(pct, cls) {
 // Needs you
 // ------------------------------------------------------------------------------------------------
 
-/** How long the button `key` still reads "Copied", 0 when it does not (then forgotten). @param {string} key */
-function copiedLeft(key) {
-  const left = (copiedAt.get(key) ?? -Infinity) + COPIED_MS - Date.now();
-  if (left <= 0) copiedAt.delete(key);
-  return Math.max(0, left);
-}
-
-/** Selects the contents of `el`, for the user to copy by hand. @param {Element} el */
-function select(el) {
-  const selection = window.getSelection();
-  if (!selection || !el.isConnected) return;
-  const range = document.createRange();
-  range.selectNodeContents(el);
-  selection.removeAllRanges();
-  selection.addRange(range);
-}
-
 /**
- * The "Ask:" box: the request and its copy button. The button copies with the clipboard API and
- * reads "Copied" for 2 s; when the browser refuses (the page is not focused, no permission), the
- * request is selected instead.
+ * The "Ask:" box: the request and its copy button (copy.js).
  * @param {string} text @param {string} key the button's data-key
  * @param {boolean} open the request ends where the user types (an answer)
  */
 function askBox(text, key, open) {
   const request = h('span', { class: ['ask-text', open && 'ask-open'], 'data-testid': 'ask-text' }, text);
-  const button = h('button', { type: 'button', class: 'copy', 'data-testid': 'copy', 'data-key': key, onclick: () => void copy() });
-  /** @type {ReturnType<typeof setTimeout> | undefined} */
-  let timer;
-  const show = () => {
-    const left = copiedLeft(key);
-    button.classList.toggle('is-copied', left > 0);
-    button.replaceChildren(...(left > 0
-      ? [icon('check', 14), h('span', null, 'Copied')]
-      : [icon('copy', 16), h('span', { class: 'sr-only' }, 'Copy request')]));
-    clearTimeout(timer);
-    if (left > 0) timer = setTimeout(show, left);
-  };
-  async function copy() {
-    try {
-      await navigator.clipboard.writeText(text);
-    } catch {
-      select(request);
-      return;
-    }
-    copiedAt.set(key, Date.now());
-    show();
-  }
-  show();
-  return h('div', { class: 'ask' }, h('span', { class: 'ask-label' }, 'Ask:'), request, button);
+  return h('div', { class: 'ask' }, h('span', { class: 'ask-label' }, 'Ask:'), request, copyButton(text, key, request));
 }
 
 /**

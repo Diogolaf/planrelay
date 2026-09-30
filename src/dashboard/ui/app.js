@@ -1,7 +1,9 @@
 import { h } from './dom.js';
 import { plural } from './format.js';
+import { activity } from './views/activity.js';
 import { board } from './views/board.js';
 import { overview } from './views/overview.js';
+import { task } from './views/task.js';
 
 /**
  * The dashboard app (spec section 13): hash routes, data loading, live updates over server-sent
@@ -81,27 +83,11 @@ export function parseRoute(hash) {
 }
 
 // ------------------------------------------------------------------------------------------------
-// Views: views/*.js, and placeholders until activity.js and task.js replace them
+// Views: views/*.js
 // ------------------------------------------------------------------------------------------------
 
-/** @param {string} title @returns {View} */
-const placeholder = (title) => () => h('div', { class: 'page' }, h('h1', { class: 'page-title' }, title));
-
-/** @type {View} */
-function taskPlaceholder({ task }) {
-  if (task?.error) return h('div', { class: 'page' }, h('p', { class: 'page-note' }, task.error));
-  if (!task?.data) return h('div', { class: 'page' }, h('p', { class: 'page-note' }, 'Loading the task'));
-  return h('div', { class: 'page' }, h('h1', { class: 'page-title' },
-    h('span', { class: 'mono' }, `#${task.data.id}`), ' ', h('span', { class: 'bidi', dir: 'auto' }, task.data.title)));
-}
-
 /** @type {Record<RouteName, View>} */
-const VIEWS = {
-  overview,
-  board,
-  activity: placeholder('Activity'),
-  task: taskPlaceholder,
-};
+const VIEWS = { overview, board, activity, task };
 
 // ------------------------------------------------------------------------------------------------
 // State and elements
