@@ -100,10 +100,13 @@ function askBox(text, key, open) {
   return h('div', { class: 'ask' }, h('span', { class: 'ask-label' }, 'Ask:'), request, button);
 }
 
-/** The one-line detail: `text` (cut to fit, whole in the tooltip), then `meta`. @param {Node | string} text @param {string} full @param {string} [meta] */
-const detail = (text, full, meta) => h('div', { class: 'needs-detail' },
-  h('span', { class: 'needs-detail-text', title: full }, text),
-  meta && h('span', { class: 'needs-detail-meta' }, meta));
+/**
+ * The detail: `text`, then `meta`, on up to two lines (the whole of it in the tooltip).
+ * @param {Node | string | (Node | string)[]} text @param {string} full `text` as plain text @param {string} [meta]
+ */
+const detail = (text, full, meta) => h('div', { class: 'needs-detail', 'data-testid': 'needs-detail', title: meta ? `${full} ${meta}` : full },
+  h('span', { class: 'needs-detail-text' }, text),
+  meta && [' ', h('span', { class: 'needs-detail-meta' }, meta)]);
 
 /** @param {any} q a question to the human @param {number} now */
 function questionRow(q, now) {

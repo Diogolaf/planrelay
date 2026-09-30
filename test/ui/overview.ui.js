@@ -43,6 +43,34 @@ test('Needs you: the question, the suggestions to approve and the stalled claim,
   assert.match(await stalled.textContent(), /Cobalt's session ended · released automatically in \d+ h/);
 }));
 
+test('Needs you: at 1024 px the question and the release time are shown whole', () => withDashboard(async ({ page, url }) => {
+  await page.setViewportSize({ width: 1024, height: 768 });
+  await openOverview(page, url);
+  await page.evaluate(() => document.fonts.ready);
+  /** Nothing in the detail box is cut, and the text `part` lies inside it. */
+  const shownWhole = (/** @type {'QUESTION' | 'STALLED'} */ kind, /** @type {string} */ part) => needsRow(page, kind).getByTestId('needs-detail')
+    .evaluate((el, text) => {
+      const clipped = [el, ...el.querySelectorAll('*')].filter((e) => getComputedStyle(e).overflowX !== 'visible'
+        && (e.scrollWidth > e.clientWidth || e.scrollHeight > e.clientHeight));
+      const node = [el, ...el.querySelectorAll('*')].flatMap((e) => [...e.childNodes])
+        .find((n) => n.nodeType === Node.TEXT_NODE && (n.textContent ?? '').includes(text));
+      if (clipped.length > 0 || !node) return `clipped: ${clipped.length}, text found: ${Boolean(node)}`;
+      const range = document.createRange();
+      const at = (node.textContent ?? '').indexOf(text);
+      range.setStart(node, at);
+      range.setEnd(node, at + text.length);
+      const box = el.getBoundingClientRect();
+      const rects = [...range.getClientRects()];
+      const inside = rects.length > 0
+        && rects.every((r) => r.width > 0 && r.left >= box.left - 0.5 && r.right <= box.right + 0.5 && r.bottom <= box.bottom + 0.5);
+      return inside ? 'whole' : 'outside the box';
+    }, part);
+  assert.equal(await shownWhole('QUESTION', 'Should "quick" mean under 15 or under 30 minutes?'), 'whole');
+  assert.equal(await shownWhole('STALLED', 'released automatically in '), 'whole');
+  const question = needsRow(page, 'QUESTION').getByTestId('needs-detail');
+  assert.match(String(await question.getAttribute('title')), /^Should "quick" mean under 15 or under 30 minutes\? · asked by Jade · \d+ min ago$/);
+}));
+
 test('Needs you: "Copied" outlives a live re-render, then goes after 2 s', () => withDashboard(async ({ page, url, board, repo }) => {
   await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin: new URL(url).origin });
   await page.clock.install();

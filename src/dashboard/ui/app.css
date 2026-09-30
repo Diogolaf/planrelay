@@ -351,9 +351,16 @@ button, input, select { font: inherit; color: inherit; }
 .needs-title { font-size: 15px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .needs-title .task-link { overflow-wrap: normal; }
 .needs-title .task-id { font-family: inherit; font-weight: inherit; color: inherit; }
-.needs-detail { display: flex; gap: 0.3em; min-width: 0; font-size: 14px; color: var(--muted); white-space: nowrap; }
-.needs-detail-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.needs-detail-meta { flex-shrink: 0; }
+/* the detail runs to two lines, then is cut; the whole of it is in the tooltip */
+.needs-detail {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  font-size: 14px;
+  color: var(--muted);
+}
 
 /* the "Ask:" box and its copy button */
 .ask {
