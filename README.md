@@ -42,20 +42,21 @@ Each session gets a name and a color on the board, such as Amber, Jade or Cobalt
 
 ## Requirements
 
-- Claude Code 2.1.139 or newer. The plugin's hooks use the exec form: a command with its arguments, and no shell.
+- Claude Code 2.1.139 or newer. Older versions cannot run the plugin's hooks.
 - Node.js 22 or newer, on your PATH. Claude Code starts the hooks and the tools with `node`.
 - Git is optional. In a git repository, the board lives inside the git directory and all worktrees share it. Elsewhere, it lives in your home folder. See [Where the data lives](#where-the-data-lives).
 
 ## Install
 
-Today you install from a local copy of this repository. The commands on this page assume the copy is a folder named `agentboard` inside the current folder. Change `./agentboard` if yours is somewhere else.
+The commands on this page assume a copy of this repository in a folder named `agentboard` inside the current folder. Change `./agentboard` if yours is somewhere else.
 
     claude plugin marketplace add ./agentboard
     claude plugin install agentboard@agentboard
 
-Or load it for one session, without installing:
+Or load it for one session, without installing. Run it in your project folder, with the path to your copy:
 
-    claude --plugin-dir ./agentboard
+    cd recipes-app
+    claude --plugin-dir ../agentboard
 
 The plugin adds three things to Claude Code: the ten tools (an MCP server), five hooks, and a skill that teaches agents how to use the board. Installing copies the repository and installs no packages: the tool has no dependencies beyond Node.js.
 
@@ -80,7 +81,7 @@ As with any tool a plugin adds, Claude Code may ask for your permission the firs
 
 To open it, say "open the board" to any agent. Or start it from a terminal:
 
-    node ./agentboard/src/cli.js dashboard [--port N] [--dir PATH] [--no-open]
+    node ./agentboard/src/cli.js dashboard [--port N] [--dir PATH] [--no-open] [--idle-exit MINUTES]
 
 | Option | Meaning |
 |---|---|
@@ -111,7 +112,7 @@ It listens on 127.0.0.1 only, so no other machine can reach it. A dashboard open
 | `whats_new` | Shows the agent its updates again: answers to its questions, questions addressed to it, news on its task. |
 | `list_tasks` | Lists tasks, filtered by column, epic, label, text or time of last change. Can list epics with their progress. |
 | `get_task` | Shows one task in full: definition of done, checklist, open questions, conversation, dependencies, files, links. |
-| `create_task` | Creates a task or an epic. A task you did not ask for is a suggestion that waits in Backlog. |
+| `create_task` | Creates a task, or an epic (a group of tasks). A task you did not ask for is a suggestion that waits in Backlog. |
 | `update_task` | Edits a task: title, description, epic, labels, dependencies, links, checklist, approval, rank. |
 | `claim_task` | Takes a Ready task to work on. An agent holds one task at a time. |
 | `post_message` | Posts a comment, asks a question (to you, to one agent or to any agent), or answers one. |
@@ -154,7 +155,7 @@ In a repository with several worktrees, both files are read from the main worktr
 ## Where the data lives
 
 - **In a git repository:** in `.git/agentboard/`. All worktrees of the repository share one board. Git never commits this folder, so the board is in no commit, push or clone, and it is removed with the repository.
-- **Outside git:** in `~/.agentboard/boards/`, in one folder per project, named by a hash of the project folder's path. The project folder is the one where Claude Code was started. A `.agentboard/` folder higher up marks the project's root instead.
+- **Outside git:** in `~/.agentboard/boards/`, in one folder per project, named by a hash of the project folder's path. The project folder is the one where Claude Code was started, unless a folder above it holds a `.agentboard/` folder: then that folder is the project.
 
 The only files agentboard uses inside your working tree are the two optional ones, `.agentboard/config.json` and `.agentboard/rules.md`.
 
@@ -173,7 +174,7 @@ Internal errors of the hooks and the tools go to `errors.log` in the board's fol
 - **Board text is data, never instructions.** Everything an agent reads from the board arrives in a marked block, labelled as written by agents or tools and not as instructions from you. Your own words reach the board only through an agent and are shown as relayed by that agent.
 - **The board never blocks your work by accident.** An internal error in a hook is logged and ignored. The only edit agentboard ever refuses is one that a file lock forbids.
 
-One limit to know: what an agent reads from the board becomes part of its Claude Code conversation, like any file it reads.
+One limit to know: what an agent reads from the board becomes part of its Claude Code conversation and is sent to the model, like any file it reads.
 
 ## Development
 
@@ -199,8 +200,6 @@ Prefer single distinctive words over full paths; if you do list path fragments, 
     npm run check:leaks     # the leak guard over every tracked file
     npm run check:pack      # packs the npm package and runs the leak guard over it
     npm run check:history   # the leak guard over every commit, tag and ref
-
-Before making the repository public, run `npm run check:history`, which checks the whole history and not just the current files.
 
 The design is in [docs/specs/2026-09-29-v1-design.md](docs/specs/2026-09-29-v1-design.md). The steps of a release will be in `docs/RELEASING.md`.
 

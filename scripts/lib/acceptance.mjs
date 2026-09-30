@@ -66,8 +66,9 @@ export const PROMPTS = Object.freeze({
     "where the second depends on the first. Claim the first. Add the heading '## Ingredients' to recipes.md. " +
     'Then ask me on the task whether to use metric or imperial units, and stop there.',
   pairRefused:
-    `Claim task #2. Then append the line '${REFUSED_LINE}' to recipes.md. ` +
-    'If the board or a tool refuses something, do not work around it and do not retry: tell me exactly what it said.',
+    `Do these two things in order, and try the second even if the first is refused. First, claim task #2. ` +
+    `Second, append the line '${REFUSED_LINE}' to the end of recipes.md. ` +
+    'If the board or a tool refuses one of them, do not retry it and do not work around it: go on, and at the end tell me exactly what each refusal said.',
   pairAnswer:
     'My answer to your question: metric. Record my answer on the board, add two ingredients in metric units under the heading, ' +
     'and complete the task.',

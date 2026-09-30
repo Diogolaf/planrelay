@@ -14,7 +14,7 @@ export function npmPack(root, dest) {
   const r = cli && /npm-cli\.js$/.test(cli)
     ? spawnSync(process.execPath, [cli, ...args], { cwd: root, encoding: 'utf8' })
     : spawnSync(`npm ${args.map((a) => `"${a}"`).join(' ')}`, { cwd: root, encoding: 'utf8', shell: true });
-  if (r.status !== 0) throw new Error(`npm pack failed (exit ${r.status})`);
+  if (r.status !== 0) throw new Error(`npm pack failed (exit ${r.status}): ${String(r.stderr).trim()}`);
   const [{ filename }] = JSON.parse(r.stdout);
   return path.join(dest, filename);
 }
