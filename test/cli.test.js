@@ -1,4 +1,4 @@
-import { test } from 'node:test';
+import { after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -6,6 +6,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { openBoard, readRegistry, readState } from '../src/core/store.js';
 import { boardId } from '../src/dashboard/server.js';
+import { NAME } from '../src/name.js';
 import { buildRecipesBoard } from './fixtures/recipes-app.js';
 import { gitEnv, tempDir, tempRepo } from './helpers.js';
 
@@ -36,9 +37,16 @@ async function waitFor(check, timeoutMs = 10000) {
   }
 }
 
+/** Every `agentboard mcp` process started here. One a failed test left running is stopped at the end, so the run fails instead of hanging. */
+const servers = [];
+after(() => {
+  for (const child of servers) child.kill();
+});
+
 /** A running `agentboard mcp` process: send JSON-RPC messages, read its answers, close its input. */
 function mcp(env) {
   const child = spawn(process.execPath, [CLI, 'mcp'], { env: childEnv(env) });
+  servers.push(child);
   const lines = [];
   let buf = '';
   let stderr = '';
@@ -117,7 +125,7 @@ test('mcp: answers initialize and tools/list over stdio, and exits when its inpu
   s.send({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
   const init = await s.answer(1);
   const list = await s.answer(2);
-  assert.equal(init.result.serverInfo.name, 'agentboard');
+  assert.equal(init.result.serverInfo.name, NAME);
   assert.equal(list.result.tools.length, 10);
   assert.equal(await s.close(), 0);
   assert.equal(s.lines.length, 2);

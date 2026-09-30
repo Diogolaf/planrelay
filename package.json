@@ -17,6 +17,7 @@
     "check:leaks": "node scripts/check-denylist.mjs --all",
     "check:history": "node scripts/check-denylist.mjs --history",
     "check:pack": "node scripts/check-pack.mjs",
+    "prepublishOnly": "node scripts/check-pack.mjs",
     "screenshots": "node scripts/screenshots.mjs"
   }
 }
