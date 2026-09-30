@@ -1,10 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { endAgent, touchAgent } from '../../src/core/agents.js';
+import { DEFAULTS } from '../../src/core/config.js';
+import { claimTask, completeTask, createTask } from '../../src/core/ops.js';
+import { transact } from '../../src/core/store.js';
 import { FIXTURE_IDS as ID } from '../fixtures/recipes-app.js';
 import { HOUR } from '../helpers.js';
 import { requestTask, withDashboard } from './harness.js';
 
-/** @typedef {import('playwright').Page} Page */
+/** @typedef {import('playwright').Page} Page @typedef {import('../../src/core/store.js').Board} Board */
 
 const DAY = 24 * HOUR;
 /** Every task of the fixture (not the epics). */
@@ -45,6 +49,40 @@ const card = (page, id) => page.getByTestId(`card-${id}`);
 const columnCount = (page, key) => page.getByTestId(`column-${key}`).getByTestId('column-count');
 /** The text shown on a toolbar select. @param {Page} page @param {'epic' | 'agent' | 'label' | 'group'} name */
 const filterText = (page, name) => page.getByTestId(`filter-${name}`).getByTestId('filter-text').textContent();
+/** Ends Jade's session, as the SessionEnd hook does: a registry change only, the board's seq stays. @param {Board} board */
+function endJade(board) {
+  transact(board, (state, reg, at) => {
+    endAgent(reg, 'fixture-jade', at);
+    return { registry: reg };
+  });
+}
+
+/**
+ * Writes the epic "Onboarding" and its one task, done now, by an agent of its own (an agent holds
+ * one task at a time). @param {Board} board @param {string} repo @returns {{ epic: number, task: number }}
+ */
+function finishedEpic(board, repo) {
+  const agentId = 'fixture-plum';
+  const op = (fn, input) => transact(board, (state, reg, at) => {
+    touchAgent(reg, { id: agentId, folder: repo, seq: state.seq }, at);
+    const out = fn({ state, reg, cfg: DEFAULTS, agentId, now: at }, input);
+    return { events: out.events, registry: reg, result: out.result };
+  }).result;
+  const epic = op(createTask, { kind: 'epic', title: 'Onboarding', requestedByHuman: true }).id;
+  const task = op(createTask, { title: 'Welcome screen', parent: epic, requestedByHuman: true }).id;
+  op(claimTask, { id: task });
+  op(completeTask, { id: task, summary: 'The welcome screen shows on first launch.' });
+  return { epic, task };
+}
+
+/** The names of the swimlanes shown. @param {Page} page */
+const laneNames = (page) => page.getByTestId('lane-name').allTextContents();
+/** A swimlane by name. @param {Page} page @param {string} name */
+const lane = (page, name) => page.getByTestId('lane').filter({ has: page.getByTestId('lane-name').getByText(name, { exact: true }) });
+/** The ids of the cards in a swimlane, in page order. @param {Page} page @param {string} name */
+const idsIn = (page, name) => lane(page, name).evaluate((el) => [...el.querySelectorAll('[data-testid^="card-"]')]
+  .map((c) => Number(/** @type {string} */ (c.getAttribute('data-testid')).slice(5))));
+
 /** A sidebar entry. @param {Page} page @param {'side-epic' | 'side-agent' | 'side-label'} kind @param {string | RegExp} text */
 const side = (page, kind, text) => page.getByTestId('board-sidebar').getByTestId(kind).filter({ hasText: text });
 
@@ -153,24 +191,32 @@ test('the needs-you strip: one chip per item, and a link to the Overview', () =>
   await page.getByTestId('needs-you').waitFor();
 }));
 
-test('search: #/board?q= shows the matches only, and asks the server once per search', () => withDashboard(async ({ page, url, board, repo }) => {
+test('search: #/board?q= shows the matches only, asked once per search and board change', () => withDashboard(async ({ page, url, board, repo }) => {
   /** @type {string[]} */
   const searches = [];
   page.on('request', (r) => { if (r.url().includes('/api/search')) searches.push(r.url()); });
   await openBoard(page, url, '#/board?q=vegetarian');
   await expectCards(page, [ID.vegetarian]);
   assert.equal(await page.getByTestId('search').inputValue(), 'vegetarian');
-  await page.getByTestId('live').filter({ hasText: 'live' }).waitFor();
-  await page.evaluate(() => { /** @type {any} */ (window).shown = document.querySelector('[data-testid="board"]'); });
-  requestTask(board, repo, 'Print a recipe card');
-  await page.waitForFunction(() => document.querySelector('[data-testid="board"]') !== /** @type {any} */ (window).shown); // built again
-  await expectCards(page, [ID.vegetarian]);
+  await page.getByTestId('live').filter({ hasText: '2 agents active · live' }).waitFor();
   assert.equal(searches.length, 1);
+  // a task created since that matches shows: the board's seq changed, so the search is asked again
+  const lasagna = requestTask(board, repo, 'Vegetarian lasagna');
+  await expectCards(page, [ID.vegetarian, lasagna]);
+  assert.equal(searches.length, 2);
+  // a render at the same seq (the registry changed, not the board) asks nothing
+  await page.evaluate(() => { /** @type {any} */ (window).shown = document.querySelector('[data-testid="board"]'); });
+  endJade(board);
+  await page.getByTestId('live').filter({ hasText: '1 agent active · live' }).waitFor();
+  await page.waitForFunction(() => document.querySelector('[data-testid="board"]') !== /** @type {any} */ (window).shown); // built again
+  await page.waitForTimeout(200);
+  assert.equal(searches.length, 2);
+  await expectCards(page, [ID.vegetarian, lasagna]);
   await page.getByTestId('search').fill('filter');
   await page.keyboard.press('Enter');
   await page.waitForURL(/#\/board\?q=filter$/);
   await expectCards(page, [ID.vegetarian, ID.prepTime]);
-  assert.equal(searches.length, 2);
+  assert.equal(searches.length, 3);
 }));
 
 test('the toolbar selects set the filters in the hash, and hold a live render while open', () => withDashboard(async ({ page, url, board, repo }) => {
@@ -198,18 +244,20 @@ test('the toolbar selects set the filters in the hash, and hold a live render wh
   await page.waitForURL(new RegExp(`#/board\\?epic=${ID.filters}$`));
   await expectCards(page, [ID.vegetarian, ID.prepTime]);
 
-  // a select opened from the keyboard holds the live render until it is left
+  // a select opened from the keyboard (Space; Enter on Windows and Linux) holds the live render until it is left
   await page.getByTestId('live').filter({ hasText: 'live' }).waitFor();
   const label = page.getByTestId('filter-label').locator('select');
-  await label.dispatchEvent('keydown', { key: ' ' });
-  await page.evaluate(() => { /** @type {any} */ (window).shown = document.querySelector('[data-testid="board"]'); });
-  const first = page.waitForResponse((r) => r.url().endsWith('/api/view'));
-  requestTask(board, repo, 'Print a recipe card');
-  await first;
-  await page.waitForTimeout(300);
-  assert.equal(await page.evaluate(() => /** @type {any} */ (window).shown === document.querySelector('[data-testid="board"]')), true);
-  await label.dispatchEvent('focusout');
-  await page.waitForFunction(() => document.querySelector('[data-testid="board"]') !== /** @type {any} */ (window).shown);
+  for (const [key, title] of [[' ', 'Print a recipe card'], ['Enter', 'Print a meal plan']]) {
+    await label.dispatchEvent('keydown', { key });
+    await page.evaluate(() => { /** @type {any} */ (window).shown = document.querySelector('[data-testid="board"]'); });
+    const loaded = page.waitForResponse((r) => r.url().endsWith('/api/view'));
+    requestTask(board, repo, title);
+    await loaded;
+    await page.waitForTimeout(300);
+    assert.equal(await page.evaluate(() => /** @type {any} */ (window).shown === document.querySelector('[data-testid="board"]')), true, `"${key}" holds the render`);
+    await label.dispatchEvent('focusout');
+    await page.waitForFunction(() => document.querySelector('[data-testid="board"]') !== /** @type {any} */ (window).shown);
+  }
 
   // a pressed select holds the live render until it changes
   const group = page.getByTestId('filter-group').locator('select');
@@ -225,27 +273,30 @@ test('the toolbar selects set the filters in the hash, and hold a live render wh
   await page.getByTestId('lane').first().waitFor();
 }));
 
-test('group by epic and by agent: one swimlane per group', () => withDashboard(async ({ page, url }) => {
+test('group by epic and by agent: one swimlane per group; Done cards go under who completed them', () => withDashboard(async ({ page, url }) => {
   await openBoard(page, url, '#/board?group=epic');
   await page.getByTestId('lane').first().waitFor();
-  assert.deepEqual(await page.getByTestId('lane-name').allTextContents(), ['Search', 'Filters', 'Accounts', 'No epic']);
+  assert.deepEqual(await laneNames(page), ['Search', 'Filters', 'Accounts', 'No epic']);
   assert.equal(await filterText(page, 'group'), 'Group by: epic');
-  const lane = (name) => page.getByTestId('lane').filter({ has: page.getByTestId('lane-name').getByText(name, { exact: true }) });
-  const idsIn = (name) => lane(name).evaluate((el) => [...el.querySelectorAll('[data-testid^="card-"]')]
-    .map((c) => Number(/** @type {string} */ (c.getAttribute('data-testid')).slice(5))));
-  assert.deepEqual(await idsIn('Search'), [ID.pagination, ID.byIngredient]);
-  assert.deepEqual(await idsIn('Filters'), [ID.vegetarian, ID.prepTime]);
-  assert.deepEqual(await idsIn('Accounts'), [ID.passwordReset, ID.rememberMe, ID.photoUpload]);
-  assert.deepEqual(await idsIn('No epic'), [ID.cachePhotos, ID.darkMode, ID.favorites, ID.rounding]);
-  assert.deepEqual(await lane('Filters').getByTestId('lane-cell-in_progress').locator('[data-testid^="card-"]').count(), 1);
+  assert.deepEqual(await idsIn(page, 'Search'), [ID.pagination, ID.byIngredient]);
+  assert.deepEqual(await idsIn(page, 'Filters'), [ID.vegetarian, ID.prepTime]);
+  assert.deepEqual(await idsIn(page, 'Accounts'), [ID.passwordReset, ID.rememberMe, ID.photoUpload]);
+  assert.deepEqual(await idsIn(page, 'No epic'), [ID.cachePhotos, ID.darkMode, ID.favorites, ID.rounding]);
+  assert.deepEqual(await lane(page, 'Filters').getByTestId('lane-cell-in_progress').locator('[data-testid^="card-"]').count(), 1);
   // the column heads count every lane
   assert.equal(await columnCount(page, 'ready').textContent(), '3');
 
   await page.goto(`${url}#/board?group=agent`);
   await page.getByTestId('filter-group').getByTestId('filter-text').filter({ hasText: 'Group by: agent' }).waitFor();
-  assert.deepEqual(await page.getByTestId('lane-name').allTextContents(), ['Amber', 'Jade', 'No agent', 'Unassigned']);
-  assert.deepEqual(await idsIn('No agent'), [ID.photoUpload]);
-  assert.deepEqual(await idsIn('Jade'), [ID.prepTime]);
+  assert.deepEqual(await laneNames(page), ['Amber', 'Jade', 'No agent', 'Unassigned']);
+  assert.deepEqual(await idsIn(page, 'Amber'), [ID.vegetarian, ID.rounding]); // #14: Amber completed it
+  assert.deepEqual(await idsIn(page, 'Jade'), [ID.prepTime, ID.byIngredient]); // #4: Jade completed it
+  assert.deepEqual(await idsIn(page, 'No agent'), [ID.photoUpload]);
+  assert.deepEqual(await idsIn(page, 'Unassigned'), [ID.cachePhotos, ID.darkMode, ID.passwordReset, ID.rememberMe, ID.favorites, ID.pagination]);
+  // the Agent filter follows the holder only: Jade holds #6, and only completed #4
+  await page.goto(`${url}#/board?agent=fixture-jade&group=agent`);
+  await expectCards(page, [ID.prepTime]);
+  assert.deepEqual(await laneNames(page), ['Jade']);
 }));
 
 test('Backlog and Ready show 20, then "+ N more", which stays open across live renders', () => withDashboard(async ({ page, url, board, repo }) => {
@@ -269,20 +320,35 @@ test('Backlog and Ready show 20, then "+ N more", which stays open across live r
   assert.equal(await page.getByTestId('column-in_progress').getByTestId('column-more').count(), 0);
 }));
 
-test('Done shows the last 7 days; "See all N" shows the rest', () => withDashboard(async ({ page, url }) => {
-  // The server's clock 8 days ahead: both done tasks are older than 7 days.
+test('Done shows the last 7 days, in columns and swimlanes; "See all N" shows the rest', () => withDashboard(async ({ page, url, board, repo }) => {
+  // The server's clock 8 days ahead: every done task is older than 7 days, Onboarding's one task too.
+  const onboarding = finishedEpic(board, repo);
   await openBoard(page, url);
   const done = page.getByTestId('column-done');
-  assert.equal(await columnCount(page, 'done').textContent(), '2');
+  assert.equal(await columnCount(page, 'done').textContent(), '3');
   assert.equal(await done.locator('[data-testid^="card-"]').count(), 0);
-  await done.getByRole('link', { name: 'See all 2' }).click();
+  await done.getByRole('link', { name: 'See all 3' }).click();
   await page.waitForURL(/#\/board\?done=all$/);
-  await expectCards(page, ALL);
-  assert.equal(await done.locator('[data-testid^="card-"]').count(), 2);
+  await expectCards(page, [...ALL, onboarding.task]);
+  assert.equal(await done.locator('[data-testid^="card-"]').count(), 3);
   await page.getByTestId('board-toolbar').getByText('Done shows every task', { exact: false }).waitFor();
   await page.getByTestId('board-toolbar').getByRole('link', { name: 'Show the last 7 days' }).click();
   await page.waitForURL(/#\/board$/);
-  await done.getByRole('link', { name: 'See all 2' }).waitFor();
+  await done.getByRole('link', { name: 'See all 3' }).waitFor();
+
+  // swimlanes hold the cards shown: no lane for an epic whose tasks are all older Done tasks, and
+  // one "See all N" in the Done column head
+  await page.goto(`${url}#/board?group=epic`);
+  await page.getByTestId('lane').first().waitFor();
+  assert.deepEqual(await laneNames(page), ['Search', 'Filters', 'Accounts', 'No epic']);
+  assert.equal(await lane(page, 'Search').getByTestId('lane-count').textContent(), '1 task'); // #13; #4 is old Done
+  assert.equal(await page.getByTestId('lane').getByTestId('done-see-all').count(), 0);
+  assert.equal(await page.getByTestId('done-see-all').count(), 1);
+  await page.getByTestId('column-done').getByRole('link', { name: 'See all 3' }).click();
+  await page.waitForURL(/#\/board\?group=epic&done=all$/);
+  await page.getByTestId('lane-name').filter({ hasText: 'Onboarding' }).waitFor();
+  assert.deepEqual(await laneNames(page), ['Search', 'Filters', 'Accounts', 'Onboarding', 'No epic']);
+  assert.deepEqual(await idsIn(page, 'Onboarding'), [onboarding.task]);
 }, { dashboard: { now: () => Date.now() + 8 * DAY } }));
 
 test('a filter that matches nothing, or names what no longer exists, shows "No tasks match these filters."', () => withDashboard(async ({ page, url }) => {

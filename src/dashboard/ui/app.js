@@ -31,10 +31,10 @@ import { task } from './views/task.js';
  *
  * Rendering the main area (renderMain). With agents at work, live loads come every few seconds, so a
  * render must not get in the user's way:
- * - it waits while the user is in the middle of something in the main area: a <select> there was
- *   pressed, or opened from the keyboard (Space, F4, Alt+Up or Alt+Down), and has not fired change
- *   or focusout yet, or a text selection lies there. It runs when that ends. A route change renders
- *   at once.
+ * - it waits while the user is in the middle of something in the main area: a <select> there is
+ *   open (:open, where the browser has it), or was pressed or opened from the keyboard (Space, Enter,
+ *   F4, the arrow keys, with or without Alt) and has not fired change or focusout yet; or a text
+ *   selection lies there. It runs when that ends. A route change renders at once.
  * - it keeps the focus on the element with the same `data-key`, and the scroll position of every
  *   element with a `data-scroll-key`.
  *
@@ -186,6 +186,11 @@ function renderBanner() {
 /** Is the user in the middle of something in the main area that a render would undo? */
 function interacting() {
   if (state.pressedSelect?.isConnected) return true;
+  try {
+    if (els.main.querySelector('select:open')) return true;
+  } catch {
+    // a browser without :open: the pressed or keyed select above is the only sign
+  }
   const selection = window.getSelection();
   return selection != null && !selection.isCollapsed
     && (els.main.contains(selection.anchorNode) || els.main.contains(selection.focusNode));
@@ -359,9 +364,11 @@ els.main.addEventListener('pointerdown', (e) => {
   const select = e.target instanceof Element ? e.target.closest('select') : null;
   if (select) state.pressedSelect = select;
 });
+// Keys that open a select's list on some system (Enter on Windows and Linux, the arrows on macOS).
+// Where an arrow changes the value instead, it fires change, which ends the wait at once.
+const OPENS_SELECT = new Set([' ', 'Enter', 'F4', 'ArrowDown', 'ArrowUp']);
 els.main.addEventListener('keydown', (e) => {
-  const opens = e.key === ' ' || e.key === 'F4' || (e.altKey && (e.key === 'ArrowDown' || e.key === 'ArrowUp'));
-  if (opens && e.target instanceof HTMLSelectElement) state.pressedSelect = e.target;
+  if (OPENS_SELECT.has(e.key) && e.target instanceof HTMLSelectElement) state.pressedSelect = e.target;
 });
 for (const type of ['change', 'focusout']) {
   els.main.addEventListener(type, (e) => {

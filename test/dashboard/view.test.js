@@ -145,8 +145,8 @@ test('cards: blockers, stalled chip and meta per column', () => {
 test('Done cards carry who completed them; the holder stays the assignee', () => {
   const v = fixtureView();
   const card = (id) => v.cards.find((c) => c.id === id);
-  assert.deepEqual(card(ID.byIngredient).completer, { name: 'Jade', color: '#17735A' });
-  assert.deepEqual(card(ID.rounding).completer, { name: 'Amber', color: '#A45F00' });
+  assert.deepEqual(card(ID.byIngredient).completer, { id: 'fixture-jade', name: 'Jade', color: '#17735A' });
+  assert.deepEqual(card(ID.rounding).completer, { id: 'fixture-amber', name: 'Amber', color: '#A45F00' });
   assert.equal(card(ID.byIngredient).assignee, null); // agent filters follow the holder, not the completer
   assert.ok(v.cards.filter((c) => c.column !== 'done').every((c) => c.completer === null));
 });
@@ -378,9 +378,9 @@ test('Shipped today starts at midnight; the completer from the stored name, then
   const v = viewOf(state, regOf(agent('ag-a', 'Plum')));
   assert.deepEqual(v.shippedToday.map((s) => [s.id, s.agentName, s.doneAt, s.summary]), [[3, 'Jade', NOW - MIN, null], [2, 'Plum', MIDNIGHT, 'At midnight.']]);
   assert.deepEqual(v.cards.map((c) => c.id), [3, 2, 1]); // Done: newest first
-  // the completer: the stored name, then the registry's; gray when the registry no longer knows the agent
+  // the completer: the stored name, then the registry's; gray, and no id, when the registry does not know the agent
   assert.deepEqual(v.cards.map((c) => c.completer), [
-    { name: 'Jade', color: UNKNOWN_COLOR }, { name: 'Plum', color: '#4F6B1F' }, { name: 'Amber', color: '#4F6B1F' },
+    { id: null, name: 'Jade', color: UNKNOWN_COLOR }, { id: 'ag-a', name: 'Plum', color: '#4F6B1F' }, { id: 'ag-a', name: 'Amber', color: '#4F6B1F' },
   ]);
 });
 

@@ -10,9 +10,11 @@ import { duration, metaText, plural } from '../format.js';
  * - epic: an epic's id; a card matches when that epic is one of its ancestors (card.epicIds);
  * - agent: the holder's agent id (card.assignee), or "none" for stalled cards;
  * - label: one of the card's labels;
- * - q: the ids /api/search returns for it, fetched once per q (the answer for the current q is kept);
+ * - q: the ids /api/search returns for it, asked once per q and board seq, so a task created or
+ *   changed since shows as it should;
  * - group: "epic" or "agent" for swimlanes; done: "all" to show every Done card, not only the
- *   last 7 days (measured from the view's `now`).
+ *   last 7 days (measured from the view's `now`). The swimlanes hold the cards shown, so an epic
+ *   whose tasks are all older Done tasks has no lane.
  * A filter that matches nothing, such as an epic since deleted, shows "No tasks match these filters."
  *
  * The app builds the view again on every load and every 30 s, so it keeps no state in the DOM: the
@@ -43,12 +45,12 @@ const SEARCH_RETRY_MS = 10_000;
 const expanded = new Set();
 
 /**
- * The search for the current q: the ids and total /api/search answered, null until then;
- * failedAt: when it could not be asked (this browser's clock), else null. A new q replaces it; an
- * answer for an older q is dropped.
- * @type {{ q: string, ids: Set<number> | null, total: number, failedAt: number | null }}
+ * The search for the current q at the board's seq: the ids and total /api/search answered (the last
+ * answer for this q until the one for this seq comes), null before any; failedAt: when the last ask
+ * failed (this browser's clock), else null. A new q or seq asks again; an older ask's answer is dropped.
+ * @type {{ q: string, seq: number, ids: Set<number> | null, total: number, failedAt: number | null }}
  */
-let search = { q: '', ids: null, total: 0, failedAt: null };
+let search = { q: '', seq: -1, ids: null, total: 0, failedAt: null };
 
 /** A share in whole percents, 0 when there is nothing. @param {number} part @param {number} whole */
 const percent = (part, whole) => (whole > 0 ? Math.round((part / whole) * 100) : 0);
@@ -112,14 +114,15 @@ function matcher(f, ids) {
 }
 
 /**
- * The search for `q`, asked once: a q other than the current one (or one that failed a while ago)
- * asks /api/search and renders the view again when the answer comes.
- * @param {string} q @param {() => void} rerender
+ * The search for `q` at the board's `seq`, asked once: another q or seq (or an ask that failed a
+ * while ago) asks /api/search and renders the view again when the answer comes.
+ * @param {string} q @param {number} seq @param {() => void} rerender
  */
-function searchFor(q, rerender) {
+function searchFor(q, seq, rerender) {
   const retry = search.failedAt != null && Date.now() - search.failedAt >= SEARCH_RETRY_MS;
-  if (search.q === q && !retry) return search;
-  const mine = { q, ids: /** @type {Set<number> | null} */ (null), total: 0, failedAt: /** @type {number | null} */ (null) };
+  if (search.q === q && search.seq === seq && !retry) return search;
+  const kept = search.q === q ? search : null; // what shows until the new answer comes
+  const mine = { q, seq, ids: kept?.ids ?? null, total: kept?.total ?? 0, failedAt: /** @type {number | null} */ (null) };
   search = mine;
   fetch(`/api/search?${new URLSearchParams({ q })}`, { cache: 'no-store', headers: { Accept: 'application/json' } })
     .then((res) => (res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`))))
@@ -312,13 +315,17 @@ function cellCards(list, key, lane, ctx) {
       },
     }, open ? 'Show fewer' : `+ ${list.length - LIMIT} more`);
   } else if (key === 'done' && !ctx.f.all) {
-    shown = list.filter((c) => Number.isFinite(c.doneAt) && c.doneAt >= ctx.since);
-    if (shown.length < list.length) {
-      more = h('a', { class: 'more', href: boardHref(ctx.params, { done: 'all' }), 'data-testid': 'done-see-all', 'data-key': `see-all-${lane}` }, `See all ${list.length}`);
-    }
+    shown = list.filter((c) => recent(c, ctx.since));
+    if (shown.length < list.length) more = seeAll(list.length, `see-all-${lane}`, ctx.params);
   }
   return [shown.map((c) => cardEl(c, ctx.now)), more];
 }
+
+/** Is the card shown without done=all: not Done, or done since `since`? @param {any} c @param {number} since */
+const recent = (c, since) => c.column !== 'done' || (Number.isFinite(c.doneAt) && c.doneAt >= since);
+
+/** "See all N": shows every Done card. @param {number} n @param {string} key its data-key @param {Record<string, string>} params */
+const seeAll = (n, key, params) => h('a', { class: 'more', href: boardHref(params, { done: 'all' }), 'data-testid': 'done-see-all', 'data-key': key }, `See all ${n}`);
 
 /** The cards of each column. @param {any[]} cards @returns {Map<string, any[]>} */
 function byColumn(cards) {
@@ -348,8 +355,9 @@ function columns(cards, ctx) {
  * The swimlanes of `cards`, in order.
  * - epic: one per epic, in the sidebar's order, holding the tasks whose nearest epic it is; then
  *   "No epic".
- * - agent: one per live agent, in arrival order, holding the tasks it holds (any other holder
- *   after them); then "No agent" (stalled cards) and "Unassigned".
+ * - agent: one per live agent, in arrival order, holding the tasks it holds and the Done tasks it
+ *   completed (any other agent after them); then "No agent" (stalled cards) and "Unassigned" (no
+ *   holder, and Done tasks whose completer the registry does not know).
  * Empty lanes are left out.
  * @param {'epic' | 'agent'} group @param {any[]} cards @param {any} view @returns {Lane[]}
  */
@@ -372,9 +380,10 @@ function lanesOf(group, cards, view) {
     const unheld = [];
     const stalled = [];
     for (const c of cards) {
+      const who = c.assignee ?? (c.column === 'done' && c.completer?.id ? c.completer : null);
       if (c.stalled) stalled.push(c);
-      else if (!c.assignee) unheld.push(c);
-      else lane(`agent-${c.assignee.id}`, c.assignee.name, avatar(c.assignee)).cards.push(c);
+      else if (who) lane(`agent-${who.id}`, who.name, avatar(who)).cards.push(c);
+      else unheld.push(c);
     }
     if (stalled.length) lane('agent-none', 'No agent', avatar(null)).cards.push(...stalled);
     if (unheld.length) lane('unassigned', 'Unassigned', null).cards.push(...unheld);
@@ -382,12 +391,22 @@ function lanesOf(group, cards, view) {
   return [...lanes.values()].filter((l) => l.cards.length > 0);
 }
 
-/** The column heads over every lane, then one lane per group. @param {Lane[]} lanes @param {any[]} cards @param {Parameters<typeof cellCards>[3]} ctx */
-function swimlanes(lanes, cards, ctx) {
+/**
+ * The column heads over every lane, counting every card that passed the filters, with one "See all N"
+ * under Done; then one lane per group, of the cards shown (without done=all, Done tasks older than
+ * the last 7 days are left out, and so is a lane left empty).
+ * @param {'epic' | 'agent'} group @param {any[]} cards the cards that passed the filters @param {any} view
+ * @param {Parameters<typeof cellCards>[3]} ctx
+ */
+function swimlanes(group, cards, view, ctx) {
   const cols = byColumn(cards);
+  const shown = ctx.f.all ? cards : cards.filter((c) => recent(c, ctx.since));
+  const done = /** @type {any[]} */ (cols.get('done')).length;
+  const lanes = lanesOf(group, shown, view);
   return h('div', { class: 'lanes' },
     h('div', { class: 'lane-heads' }, COLUMNS.map(([key, name]) => h('div', { class: 'lane-head-cell', 'data-testid': `column-${key}` },
-      columnHead(key, name, /** @type {any[]} */ (cols.get(key)).length)))),
+      columnHead(key, name, /** @type {any[]} */ (cols.get(key)).length),
+      key === 'done' && shown.length < cards.length && seeAll(done, 'see-all-lanes', ctx.params)))),
     lanes.map((l) => {
       const laneCols = byColumn(l.cards);
       return h('section', { class: 'lane', 'data-testid': 'lane', 'aria-label': l.name },
@@ -395,7 +414,7 @@ function swimlanes(lanes, cards, ctx) {
           l.marker,
           h('h3', { class: 'lane-name bidi', dir: 'auto', 'data-testid': 'lane-name', title: l.name }, l.name),
           l.sub && h('span', { class: 'sub-epic' }, 'sub-epic'),
-          h('span', { class: 'lane-count' }, plural(l.cards.length, 'task'))),
+          h('span', { class: 'lane-count', 'data-testid': 'lane-count' }, plural(l.cards.length, 'task'))),
         h('div', { class: 'lane-row' }, COLUMNS.map(([key, name]) => h('div', { class: 'lane-cell', role: 'group', 'aria-label': name, 'data-testid': `lane-cell-${key}` },
           cellCards(/** @type {any[]} */ (laneCols.get(key)), key, l.key, ctx)))));
     }));
@@ -416,22 +435,24 @@ export function board({ view, route, now, rerender }) {
   const { params } = route;
   const f = filtersOf(params);
   const cards = view.cards ?? [];
-  const found = f.q ? searchFor(f.q, rerender) : null;
+  const found = f.q ? searchFor(f.q, Number.isSafeInteger(view.seq) ? view.seq : 0, rerender) : null;
   const since = (Number.isFinite(view.now) ? view.now : now) - DONE_WINDOW;
   const ctx = { now, since, f, params, rerender };
 
   /** @type {Node | Node[]} */
   let content;
-  if (found?.failedAt != null) content = emptyState('The search could not run. It is tried again shortly.', params);
-  else if (found && !found.ids) content = h('p', { class: 'page-note', 'data-testid': 'board-searching' }, 'Searching…');
-  else {
+  if (found && !found.ids) {
+    content = found.failedAt != null
+      ? emptyState('The search could not run. It is tried again shortly.', params)
+      : h('p', { class: 'page-note', 'data-testid': 'board-searching' }, 'Searching…');
+  } else {
     const shown = cards.filter(matcher(f, found?.ids ?? null));
     if (shown.length === 0 && FILTERS.some((k) => f[/** @type {keyof Filters} */ (k)])) content = emptyState('No tasks match these filters.', params);
     else {
       content = [
         found && found.total > /** @type {Set<number>} */ (found.ids).size
           && h('p', { class: 'page-note' }, `The search matched ${found.total} tasks; the board shows the first ${/** @type {Set<number>} */ (found.ids).size}.`),
-        f.group ? swimlanes(lanesOf(f.group, shown, view), shown, ctx) : columns(shown, ctx),
+        f.group ? swimlanes(f.group, shown, view, ctx) : columns(shown, ctx),
       ].filter(Boolean);
     }
   }
