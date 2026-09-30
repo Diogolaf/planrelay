@@ -4795,6 +4795,9 @@ Record anything unexpected as a task. Plan 3 runs the full acceptance script.
     - test helpers remove their temp folders on exit (prefix `agentboard-test-`).
 - **Carried over to plan 2 (dashboard):** `listTasks` refuses non-number filter values, so URL parameters such as `epic` must be converted to numbers first.
 - **Carried over to plan 3, before the first push:**
+  - README requirements: Claude Code 2.1.139 or newer (hooks use exec form with `args`), and Node.js 22 or newer on PATH.
+  - The repository root `.mcp.json` is also offered as a project server to contributors who open this repository in Claude Code; it fails harmlessly because `${CLAUDE_PLUGIN_ROOT}` is not set there. Decide whether to move the plugin files or document it.
+  - The skill maps "open the board" once the dashboard exists (plan 2).
   - CI hardening:
     - verify the gitleaks download with a SHA-256 checksum;
     - run the denylist check in its own job;
