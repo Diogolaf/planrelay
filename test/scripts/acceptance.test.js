@@ -9,7 +9,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  boardTool, checkPair, checkSolo, childEnv, claudeArgs, MAX_SESSIONS, mcpConfigOf, newRun, openSession, PROMPTS, readTurn, REFUSED_LINE,
+  boardTool, checkPair, checkSolo, childEnv, claudeArgs, closeAll, MAX_SESSIONS, mcpConfigOf, newRun, openSession, PROMPTS, readTurn, REFUSED_LINE,
   runSession, windowsCommandLine,
 } from '../../scripts/lib/acceptance.mjs';
 import { pidAlive } from '../../src/core/mutex.js';
@@ -57,7 +57,8 @@ test('claudeArgs builds the flags of a headless session', () => {
     '--permission-mode', 'acceptEdits',
     // the board's server has one name from --mcp-config and another when the plugin starts it
     '--allowedTools', 'mcp__agentboard__*', 'mcp__plugin_agentboard_agentboard__*', 'Read', 'Edit', 'Write', 'Glob', 'Grep', 'TodoWrite',
-    '--disallowedTools', 'Bash', 'PowerShell',
+    // no shell, and no dashboard left running behind the run
+    '--disallowedTools', 'Bash', 'PowerShell', 'mcp__agentboard__open_board', 'mcp__plugin_agentboard_agentboard__open_board',
     '--output-format', 'stream-json', '--verbose',
     '--max-budget-usd', '0.4', '--no-session-persistence',
   ];
@@ -616,13 +617,25 @@ test('the script refuses arguments it does not know, and a stand-in it cannot re
   }
   const help = runScript(['--help'], GOOD);
   assert.deepEqual([help.status, help.lines, help.log], [0, [USAGE.trimEnd(), ''], []]);
-  // a stand-in that is not a JSON array is an error, never a reason to run the real command
-  const r = runScript(['solo'], GOOD, { AGENTBOARD_ACCEPTANCE_CLAUDE: 'node fake-claude.mjs' });
-  assert.deepEqual(r.lines, [
-    '  FAILED  acceptance: AGENTBOARD_ACCEPTANCE_CLAUDE must be a JSON array of texts, such as ["node","test/fixtures/fake-claude.mjs"]',
-    'sessions: 0 of at most 5, total cost $0.0000',
-    'verdict: FAILED (1 problem)',
-    '',
-  ]);
-  assert.deepEqual([r.status, r.log], [1, []]);
+  // a stand-in that is not a JSON array, or is set but empty, is an error, never a reason to run the real command
+  for (const standIn of ['node fake-claude.mjs', '']) {
+    const r = runScript(['solo'], GOOD, { AGENTBOARD_ACCEPTANCE_CLAUDE: standIn });
+    assert.deepEqual(r.lines, [
+      '  FAILED  acceptance: AGENTBOARD_ACCEPTANCE_CLAUDE must be a JSON array of texts, such as ["node","test/fixtures/fake-claude.mjs"]',
+      'sessions: 0 of at most 5, total cost $0.0000',
+      'verdict: FAILED (1 problem)',
+      '',
+    ]);
+    assert.deepEqual([r.status, r.log], [1, []]);
+  }
+});
+
+test('a run that is being stopped starts no other session', async () => {
+  const f = fake([[says('Hello.')]]);
+  await runSession({ ...f.opts, label: 'first', prompt: 'go' });
+  await closeAll(f.opts.run); // what Ctrl+C does
+  const stopped = /^Error: acceptance: refusing to start second: this run is being stopped$/;
+  await assert.rejects(runSession({ ...f.opts, label: 'second', prompt: 'go' }), stopped);
+  await assert.rejects(openSession({ ...f.opts, label: 'second' }), stopped);
+  assert.equal(f.log().filter((entry) => entry.args).length, 1); // only the first ever started
 });

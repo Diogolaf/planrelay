@@ -24,7 +24,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { openBoard, readState } from '../src/core/store.js';
 import {
-  checkPair, checkSolo, closeAll, MAX_SESSIONS, mcpConfigOf, openSession, PROMPTS, runSession,
+  checkPair, checkSolo, closeAll, killAll, MAX_SESSIONS, mcpConfigOf, openSession, PROMPTS, runSession,
 } from './lib/acceptance.mjs';
 
 const ROOT = path.resolve(fileURLToPath(new URL('../', import.meta.url)));
@@ -53,7 +53,7 @@ function parseArgs(argv) {
 /** The command that replaces `claude` in tests (AGENTBOARD_ACCEPTANCE_CLAUDE), or undefined. */
 function standIn() {
   const raw = process.env.AGENTBOARD_ACCEPTANCE_CLAUDE;
-  if (!raw) return undefined;
+  if (raw === undefined) return undefined; // set but empty is a mistake, never a reason to run the real command
   let list = null;
   try {
     list = JSON.parse(raw);
@@ -217,16 +217,23 @@ const totals = { sessions: 0, cost: 0 };
 const folders = [];
 let failed = 0;
 
-process.on('SIGINT', () => {
-  closeAll().finally(() => {
-    for (const { dir } of folders) say(`left: ${dir}`);
-    process.exit(130);
+// Ctrl+C, a closed terminal or a stop request: every session is stopped and no other starts.
+for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+  process.on(signal, () => {
+    closeAll().finally(() => {
+      for (const { dir } of folders) say(`left: ${dir}`);
+      process.exit(130);
+    });
   });
-});
+}
+// however the script ends, an uncaught error included, no session outlives it
+process.on('exit', () => killAll());
 
 try {
   opts.command = standIn();
-  if (opts.command) say('AGENTBOARD_ACCEPTANCE_CLAUDE replaces the claude command: no real session starts.');
+  say(opts.command
+    ? 'AGENTBOARD_ACCEPTANCE_CLAUDE replaces the claude command: no real session starts.'
+    : `Starting real Claude Code sessions on your account: at most ${MAX_SESSIONS} in this run.`);
   for (const name of opts.scenario === 'all' ? ['solo', 'pair'] : [opts.scenario]) {
     const scenario = SCENARIOS[name];
     const folder = { dir: fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'agentboard-acceptance-'))), keep: true };

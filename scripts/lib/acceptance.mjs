@@ -18,7 +18,7 @@ import { NAME } from '../../src/name.js';
 /** @typedef {{ name: string, ok: boolean, detail: string }} Check */
 /**
  * The sessions of one run of the script: how many were started, and the ones still running.
- * @typedef {{ max: number, started: number, open: Set<{ stop: () => Promise<void> }> }} Run
+ * @typedef {{ max: number, started: number, closed: boolean, open: Set<{ stop: () => Promise<void>, kill: () => void }> }} Run
  */
 /**
  * What starts a session, besides the flags of claudeArgs.
@@ -47,7 +47,8 @@ const STOP_TIMEOUT_MS = 5_000;
 const BOARD_TOOLS = [`mcp__${NAME}__*`, `mcp__plugin_${NAME}_${NAME}__*`];
 /** The built-in tools a session may use without asking; it has no shell. */
 const ALLOWED_TOOLS = [...BOARD_TOOLS, 'Read', 'Edit', 'Write', 'Glob', 'Grep', 'TodoWrite'];
-const DENIED_TOOLS = ['Bash', 'PowerShell'];
+/** No shell, and no dashboard: open_board would start one that outlives the run and open a browser. */
+const DENIED_TOOLS = ['Bash', 'PowerShell', `mcp__${NAME}__open_board`, `mcp__plugin_${NAME}_${NAME}__open_board`];
 /** The tools that change a file (the lock applies to them). */
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit']);
 
@@ -209,7 +210,7 @@ export class SessionError extends Error {
 
 /** A fresh counter of sessions; tests use their own, the script the one of its process. @returns {Run} */
 export function newRun(max = MAX_SESSIONS) {
-  return { max, started: 0, open: new Set() };
+  return { max, started: 0, closed: false, open: new Set() };
 }
 
 /** The run of this process. */
@@ -227,11 +228,13 @@ function commandOf(command) {
 }
 
 /**
- * Starts one session and returns its handle. Every start counts against the run's limit first.
+ * Starts one session and returns its handle. Every start counts against the run's limit first,
+ * and a run that is being stopped starts nothing more.
  * @param {SessionOptions & { held: boolean }} opts
  */
 function start({ cwd, command, env = process.env, timeoutMs = TURN_TIMEOUT_MS, transcript = null, label = 'session', run = RUN, held, ...flags }) {
   const argv = [...commandOf(command), ...claudeArgs({ ...flags, held })];
+  if (run.closed) throw new Error(`acceptance: refusing to start ${label}: this run is being stopped`);
   if (run.started >= run.max) {
     throw new Error(`acceptance: refusing to start ${label}: this run has started ${run.started} sessions, and ${run.max} is the limit`);
   }
@@ -332,7 +335,12 @@ function start({ cwd, command, env = process.env, timeoutMs = TURN_TIMEOUT_MS, t
     if (!(await settlesWithin(closed, EXIT_TIMEOUT_MS))) await stop();
   };
 
-  const handle = { send, close, stop };
+  /** Stops the session's processes at once, without waiting (for the script's exit). */
+  const kill = () => {
+    if (!gone) killTree(child);
+  };
+
+  const handle = { send, close, stop, kill };
   run.open.add(handle);
   return handle;
 }
@@ -363,9 +371,19 @@ export async function openSession(opts) {
   return { send, close };
 }
 
-/** Stops every session of the run that is still running. The script calls it whatever happened. */
+/**
+ * Stops every session of the run that is still running, and lets the run start no other. The
+ * script calls it whatever happened.
+ */
 export async function closeAll(run = RUN) {
+  run.closed = true;
   await Promise.all([...run.open].map((session) => session.stop()));
+}
+
+/** The same without waiting, for the moment the process exits: nothing may outlive the script. */
+export function killAll(run = RUN) {
+  run.closed = true;
+  for (const session of run.open) session.kill();
 }
 
 // ---------------------------------------------------------------------------------------------
