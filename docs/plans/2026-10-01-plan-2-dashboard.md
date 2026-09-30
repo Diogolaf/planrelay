@@ -511,7 +511,7 @@ If an operation refuses (a `BoardError`), fix the order of the steps rather than
   agents: [{ id, name, color, initial, status: 'active' | 'idle',
              pill: 'In progress' | 'Blocked' | 'Idle' | 'No task',
              task: { id, title } | null, checklist: { done, total } | null,
-             lastFile: string | null, blockedReason: string | null, lastActivityAt }],  // live agents only, most recent first
+             lastFile: string | null, blockedReason: string | null, lastActivityAt }],  // live agents only, in order of arrival (firstSeen, oldest first), so cards never swap places on live updates
   needsYou: {
     count,                               // rows: questions + (approvals ? 1 : 0) + stalled
     questions: [{ kind: 'question', taskId, title, questionId, text, askedBy, at }],
@@ -1195,4 +1195,7 @@ Not in this plan (plan 3): npm packaging and `files` allowlist update for `src/d
   - identical blocker chips appear once;
   - every card has `completer: { name, color } | null`, set on Done cards. The Done card footer shows the completer; only `assignee` drives the Agent filter and the "No agent" count;
   - `UNKNOWN_COLOR` (`#5F5C55`) is exported for agents the registry no longer knows; `initial` is upper-case.
+- **Task 5 review fixes (done):** a Now card shows `lastFile` only when it was edited during the current claim; `withDeadEnded(reg, { host, alive, now, cfg })` also ends a live agent idle past `claimTimeoutHours` (as housekeeping will), so Now, card chips and Needs you agree; `colorOf` is exported.
+- **Task 6 (done), contract notes for Tasks 7 and 12:** conversation entries add `authorKind` (`human` | `agent` | `system`; `authorColor` null for human and system, styled with theme tokens); `question` adds `authorName`/`authorColor` and holds the full text; the CREATED entry text follows the mockup ("Requested the task and put it in the Filters epic."); tags use upper-case names (`QUESTION → JADE`, `QUESTION → ANYONE`); `checklist` is always an object; `details.origin` is capitalised; epics get status "Epic". The server must pass a numeric id (`getTask` refuses the string "5").
+- **Must-do for Task 10:** a STALLED item whose `releaseAt` is at or before now reads "released at the next change" instead of a countdown.
 - **Must-do for Task 9 (banner):** `repair` rebuilds the derived files but never removes bad lines from `events.jsonl`, so the banner must not present repair as the fix. Wording: "N lines of the board's log could not be read and were skipped.", with a dismiss button remembered per count in `localStorage` (a new bad line shows it again). Wrap every `localStorage` access in try/catch.
