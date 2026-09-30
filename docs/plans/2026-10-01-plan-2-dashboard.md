@@ -1187,4 +1187,12 @@ Not in this plan (plan 3): npm packaging and `files` allowlist update for `src/d
 
 - **Task 1 (done):** the mockups are in `docs/design/mockups/` as canvas templates (markup with `{{…}}` bindings plus a data script at the bottom; they do not render on their own). The spec records decisions 1–9.
 - **Task 2 (done, approved):** SCHEMA 3 rebuilds older boards by replay; `logHealth` never flags a batch a writer is still appending.
+- **Tasks 3 and 4 (done, approved):** the fixture makes Cobalt's handoff on #9 through release_task and a re-claim (post_message has no handoff kind), so #9's activity shows claimed, released, claimed. Three `checked` entries can share one seq.
+- **Task 5 (done), contract changes for Tasks 9–11:**
+  - a Blocked card that has a holder and only question blockers gets progress meta ("2/4 · 11 min"), as in the mockup;
+  - a stalled card's progress meta has `lastActivityAt: null` (the "No agent for …" chip shows the time);
+  - `checklist` is null when a task has no checklist items;
+  - identical blocker chips appear once;
+  - every card has `completer: { name, color } | null`, set on Done cards. The Done card footer shows the completer; only `assignee` drives the Agent filter and the "No agent" count;
+  - `UNKNOWN_COLOR` (`#5F5C55`) is exported for agents the registry no longer knows; `initial` is upper-case.
 - **Must-do for Task 9 (banner):** `repair` rebuilds the derived files but never removes bad lines from `events.jsonl`, so the banner must not present repair as the fix. Wording: "N lines of the board's log could not be read and were skipped.", with a dismiss button remembered per count in `localStorage` (a new bad line shows it again). Wrap every `localStorage` access in try/catch.
