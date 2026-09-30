@@ -278,3 +278,228 @@ button, input, select { font: inherit; color: inherit; }
 .dot-in_progress { background: var(--col-in-progress); }
 .dot-blocked { background: var(--col-blocked); }
 .dot-done { background: var(--col-done); }
+
+/* ------------------------------------------------------------------------------------------------
+ * Shared pieces of the views
+ * ---------------------------------------------------------------------------------------------- */
+
+.panel { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; }
+.section-head { display: flex; align-items: baseline; gap: 10px; }
+.section-title { margin: 0; font-size: 17px; font-weight: 700; }
+.section-note { font-size: 13px; color: var(--muted); }
+.empty-note { margin: 0; font-size: 14px; color: var(--muted); }
+
+/* chips and pills: "In progress" blue, blocking and questions orange, the rest neutral */
+.tone-accent { background: var(--accent-soft); color: var(--accent-text); }
+.tone-warn { background: var(--warn-soft); color: var(--warn-text); }
+.tone-neutral { background: var(--track); color: var(--text-2); }
+
+/* "#12 Title": the id in monospace, the title in the text color; underlined on hover */
+.task-id { font-family: var(--font-mono); font-weight: 500; color: var(--muted); }
+.task-link, .task-link:hover { color: var(--text); text-decoration: none; overflow-wrap: anywhere; }
+.task-link:hover .bidi { text-decoration: underline; }
+
+/* progress bars: a track and a fill of width --pct (set by view code) */
+.bar { display: block; overflow: hidden; background: var(--track); }
+.bar-fill { display: block; height: 100%; width: var(--pct, 0%); }
+
+/* ------------------------------------------------------------------------------------------------
+ * Overview (views/overview.js)
+ * ---------------------------------------------------------------------------------------------- */
+
+.overview {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 24px;
+  align-items: start;
+  padding: 24px;
+  line-height: normal; /* the mockup's; long text sets its own */
+}
+.overview-col { display: flex; flex-direction: column; gap: 22px; min-width: 0; }
+.overview-main { grid-column: span 8; }
+.overview-side { grid-column: span 4; }
+
+/* Needs you */
+.needs-you { display: flex; flex-direction: column; padding: 18px 22px 6px; }
+.needs-head { display: flex; align-items: center; gap: 10px; padding-bottom: 12px; }
+.count-badge {
+  min-width: 22px;
+  height: 22px;
+  padding: 0 7px;
+  border-radius: 11px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--warn-soft);
+  color: var(--warn-text);
+  font-size: 13px;
+  font-weight: 700;
+}
+.needs-note { margin-left: auto; font-size: 13px; color: var(--muted); text-align: right; }
+.needs-row { display: flex; align-items: center; gap: 16px; padding: 14px 0; border-top: 1px solid var(--divider); }
+.kind-chip {
+  width: 78px;
+  flex-shrink: 0;
+  padding: 4px 0;
+  border-radius: 6px;
+  text-align: center;
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+.needs-body { flex-grow: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.needs-title { font-size: 15px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.needs-title .task-link { overflow-wrap: normal; }
+.needs-title .task-id { font-family: inherit; font-weight: inherit; color: inherit; }
+.needs-detail { display: flex; gap: 0.3em; min-width: 0; font-size: 14px; color: var(--muted); white-space: nowrap; }
+.needs-detail-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.needs-detail-meta { flex-shrink: 0; }
+
+/* the "Ask:" box and its copy button */
+.ask {
+  flex-shrink: 0;
+  max-width: 50%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 5px 5px 12px;
+  border-radius: 8px;
+  background: var(--bg);
+}
+.ask-label { flex-shrink: 0; font-size: 13px; color: var(--muted); }
+.ask-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: pre;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  color: var(--text);
+  user-select: all; /* one click selects the whole request */
+}
+.ask-open::after { content: '…'; color: var(--muted); } /* the answer goes here; not part of the text copied */
+.copy {
+  flex-shrink: 0;
+  min-width: 34px;
+  height: 34px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text-2);
+  cursor: pointer;
+}
+.copy:hover { border-color: var(--muted); color: var(--text); }
+.copy.is-copied { padding: 0 10px; color: var(--done-text); font-size: 13px; font-weight: 600; }
+
+/* Now */
+.now { display: flex; flex-direction: column; gap: 12px; }
+.agent-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+.agent-card {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+}
+.agent-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; min-width: 0; } /* narrow cards: the pill goes under the name */
+.avatar {
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+  border-radius: 15px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--agent-color, var(--muted));
+  color: var(--on-agent);
+  font-size: 14px;
+  font-weight: 700;
+}
+.agent-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; font-weight: 600; }
+.pill { margin-left: auto; flex-shrink: 0; padding: 3px 8px; border-radius: 6px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+.agent-task, .agent-task:hover { color: var(--text); text-decoration: none; font-size: 14px; font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; }
+.agent-task:hover .bidi { text-decoration: underline; }
+.agent-checklist { display: flex; align-items: center; gap: 8px; }
+.bar-checklist { flex-grow: 1; height: 6px; border-radius: 3px; }
+.bar-checklist .bar-fill { background: var(--agent-color, var(--muted)); }
+.agent-checklist-text { flex-shrink: 0; font-size: 12px; color: var(--muted); }
+.agent-foot { margin-top: auto; min-width: 0; display: flex; justify-content: space-between; gap: 8px; font-size: 12.5px; color: var(--muted); }
+.agent-file { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); }
+.agent-blocked { font-weight: 600; color: var(--warn-text); }
+.agent-when { flex-shrink: 0; margin-left: auto; }
+.now-empty { margin: 0; padding: 16px; font-size: 14px; color: var(--muted); }
+
+/* Shipped today */
+.shipped { padding: 18px 22px 6px; }
+.shipped-head { padding-bottom: 10px; }
+.shipped-row { display: flex; gap: 14px; padding: 12px 0; border-top: 1px solid var(--divider); }
+.shipped-row > .icon { margin-top: 1px; color: var(--col-done); }
+.shipped-body { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.shipped-title { font-size: 14px; font-weight: 600; }
+.shipped-meta { font-weight: 400; color: var(--muted); }
+.shipped-summary {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  font-size: 13.5px;
+  line-height: 1.45;
+  color: var(--text-2);
+}
+
+/* the right column's cards */
+.side-panel { display: flex; flex-direction: column; gap: 14px; padding: 18px 20px; }
+.panel-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.see-all { font-size: 13px; font-weight: 600; }
+
+/* Epics */
+.epic-row, .epic-row:hover { display: flex; flex-direction: column; gap: 6px; color: var(--text); text-decoration: none; }
+.epic-row.is-sub { padding-left: 18px; }
+.epic-line { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 14px; }
+.epic-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.is-sub .epic-name { font-weight: 500; }
+.epic-row:hover .epic-name { text-decoration: underline; }
+.sub-epic { flex-shrink: 0; padding: 1px 6px; border-radius: 4px; background: var(--track); color: var(--text-2); font-size: 11px; font-weight: 600; }
+.epic-count { flex-shrink: 0; margin-left: auto; font-size: 13px; color: var(--muted); }
+.bar-epic { height: 8px; border-radius: 4px; }
+.bar-epic .bar-fill { border-radius: 4px; background: var(--col-done); }
+
+/* Where the work is: segments sized by flex-grow (set by view code), colored by .dot-<column> */
+.stack { display: flex; gap: 2px; height: 12px; border-radius: 6px; overflow: hidden; }
+.stack.is-empty { background: var(--track); }
+.stack-seg { display: block; flex-basis: 0; }
+.legend { display: flex; flex-direction: column; gap: 8px; }
+.legend-row { display: flex; align-items: center; gap: 10px; font-size: 14px; }
+.swatch { width: 10px; height: 10px; flex-shrink: 0; border-radius: 3px; }
+.legend-count { margin-left: auto; font-weight: 600; }
+
+/* Next in line */
+.next { display: flex; flex-direction: column; padding: 18px 20px 8px; }
+.next-note { padding: 4px 0 10px; font-size: 13px; color: var(--muted); }
+.next-empty { padding-bottom: 10px; }
+.next-row { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid var(--divider); }
+.next-pos {
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--ready-soft);
+  color: var(--ready-text);
+  font-size: 12px;
+  font-weight: 700;
+}
+.next-body { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.next-body .task-link { font-size: 14px; font-weight: 600; }
+.next-epic { font-size: 12.5px; color: var(--muted); }

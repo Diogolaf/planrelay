@@ -1,5 +1,6 @@
 import { h } from './dom.js';
 import { plural } from './format.js';
+import { overview } from './views/overview.js';
 
 /**
  * The dashboard app (spec section 13): hash routes, data loading, live updates over server-sent
@@ -60,7 +61,7 @@ export function parseRoute(hash) {
 }
 
 // ------------------------------------------------------------------------------------------------
-// Views: placeholders until views/overview.js, board.js, activity.js and task.js replace them
+// Views: views/*.js, and placeholders until board.js, activity.js and task.js replace them
 // ------------------------------------------------------------------------------------------------
 
 /** @param {string} title @returns {View} */
@@ -87,7 +88,7 @@ function taskPlaceholder({ task }) {
 
 /** @type {Record<RouteName, View>} */
 const VIEWS = {
-  overview: placeholder('Overview'),
+  overview,
   board: boardPlaceholder,
   activity: placeholder('Activity'),
   task: taskPlaceholder,
