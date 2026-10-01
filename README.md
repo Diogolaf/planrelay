@@ -10,7 +10,7 @@ It is for a developer who works alone with Claude Code, in one session or in sev
 
 ## Status
 
-Pre-release, version 0.1.0. Nothing is published yet: there is no public repository and no npm package. Today you install it from a local copy of this repository (see [Install](#install)). Public install commands will come with the first release.
+Pre-release, version 0.1.0. The plugin installs from this repository (see [Install](#install)). There is no npm package yet, so the few commands you run in a terminal need a clone of this repository.
 
 ## Screenshots
 
@@ -48,13 +48,18 @@ Each session gets a name and a color on the board, such as Amber, Jade or Cobalt
 
 ## Install
 
-The commands on this page assume a copy of this repository in a folder named `planrelay` inside the current folder. Change `./planrelay` if yours is somewhere else.
+In a terminal:
 
-    claude plugin marketplace add ./planrelay
+    claude plugin marketplace add planrelaydev-droid/planrelay
     claude plugin install planrelay@planrelay
 
-Or load it for one session, without installing. Run it in your project folder, with the path to your copy:
+Or inside Claude Code: `/plugin marketplace add planrelaydev-droid/planrelay`, then `/plugin install planrelay@planrelay`.
 
+This installs it for all your projects. To use it in one project only, run the install command in that project's folder with `--scope local`.
+
+To try it for one session without installing, clone this repository and start Claude Code in your project with the path to the clone:
+
+    git clone https://github.com/planrelaydev-droid/planrelay.git
     cd recipes-app
     claude --plugin-dir ../planrelay
 
@@ -79,7 +84,7 @@ As with any tool a plugin adds, Claude Code may ask for your permission the firs
 
 ## The dashboard
 
-To open it, say "open the board" to any agent. Or start it from a terminal:
+To open it, say "open the board" to any agent. Or start it from a terminal, with a clone of this repository (see [Install](#install)). The commands on this page assume the clone is in a folder named `planrelay` inside the current folder; change `./planrelay` if yours is somewhere else.
 
     node ./planrelay/src/cli.js dashboard [--port N] [--dir PATH] [--no-open] [--idle-exit MINUTES]
 
@@ -159,7 +164,7 @@ In a repository with several worktrees, both files are read from the main worktr
 
 The only files planrelay uses inside your working tree are the two optional ones, `.planrelay/config.json` and `.planrelay/rules.md`.
 
-The event log, `events.jsonl`, is the source of truth. If the board ever looks wrong, the `repair` command rebuilds its snapshots from the log. Run it in the project folder, with the path to your copy of planrelay:
+The event log, `events.jsonl`, is the source of truth. If the board ever looks wrong, the `repair` command rebuilds its snapshots from the log. Run it in the project folder, with the path to your clone of planrelay:
 
     cd recipes-app
     node ../planrelay/src/cli.js repair

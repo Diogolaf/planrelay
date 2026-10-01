@@ -61,7 +61,7 @@ In a throwaway project. While the repository is private, Claude Code must be abl
 ## 5. npm
 
 - [ ] In `package.json`, add `repository`, `homepage` and `bugs`, and remove `"private": true`. The `repository` field also makes the README's screenshots work on the package's npm page (the images are not in the package).
-- [ ] Update the README's lines that depend on npm, because the package carries the README and the npm page shows it until the next version: the status line, the sentence about a local copy in Install, the dashboard commands (`npx planrelay dashboard`) and the `repair` command. Commit and push.
+- [ ] Update the README's lines that depend on npm, because the package carries the README and the npm page shows it until the next version: the status line, the sentence about a clone at the start of The dashboard, the dashboard commands (`npx planrelay dashboard`) and the `repair` command. Commit and push.
 - [ ] `npm run check:pack`, then `npm pack --dry-run` and read the file list.
 - [ ] `npm login` with an npm account that belongs to the project, with two-factor authentication on. Then `npm publish` from that commit (it runs the package check again first), and tag the commit.
 - [ ] In a throwaway project: `npx planrelay dashboard`.
