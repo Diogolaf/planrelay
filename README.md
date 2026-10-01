@@ -50,16 +50,16 @@ Each session gets a name and a color on the board, such as Amber, Jade or Cobalt
 
 In a terminal:
 
-    claude plugin marketplace add planrelaydev-droid/planrelay
+    claude plugin marketplace add Diogolaf/planrelay
     claude plugin install planrelay@planrelay
 
-Or inside Claude Code: `/plugin marketplace add planrelaydev-droid/planrelay`, then `/plugin install planrelay@planrelay`.
+Or inside Claude Code: `/plugin marketplace add Diogolaf/planrelay`, then `/plugin install planrelay@planrelay`.
 
 This installs it for all your projects. To use it in one project only, run the install command in that project's folder with `--scope local`.
 
 To try it for one session without installing, clone this repository and start Claude Code in your project with the path to the clone:
 
-    git clone https://github.com/planrelaydev-droid/planrelay.git
+    git clone https://github.com/Diogolaf/planrelay.git
     cd recipes-app
     claude --plugin-dir ../planrelay
 
