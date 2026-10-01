@@ -166,6 +166,22 @@ The event log, `events.jsonl`, is the source of truth. If the board ever looks w
 
 Internal errors of the hooks and the tools go to `errors.log` in the board's folder. They never stop an agent.
 
+## Update and uninstall
+
+To update, refresh the marketplace and then the plugin, and restart Claude Code:
+
+    claude plugin marketplace update planrelay
+    claude plugin update planrelay@planrelay
+
+To uninstall the plugin, and then remove its marketplace from Claude Code:
+
+    claude plugin uninstall planrelay@planrelay
+    claude plugin marketplace remove planrelay
+
+If you installed the plugin with `--scope`, pass the same `--scope` to `update` and `uninstall`.
+
+Uninstalling leaves your boards in place. To delete a board, delete its folder (see [Where the data lives](#where-the-data-lives)).
+
 ## Privacy and safety
 
 - **No network, no telemetry.** planrelay makes no outgoing request. The dashboard's fonts and scripts are bundled, so opening it loads nothing from the internet.
@@ -204,6 +220,12 @@ Prefer single distinctive words over full paths; if you do list path fragments, 
     npm run check:history   # the leak guard over every commit, tag and ref
 
 The design is in [docs/specs/2026-09-29-v1-design.md](docs/specs/2026-09-29-v1-design.md). The steps of a release are in [docs/RELEASING.md](docs/RELEASING.md).
+
+## Contributing
+
+Bug reports and ideas are welcome: open an issue. To change the code, open an issue first and agree on the change there, before you write a pull request, so that no work is wasted.
+
+Before you send a pull request, run `npm test`, and commit with your GitHub no-reply e-mail address: the repository's checks refuse any other address.
 
 ## License
 
