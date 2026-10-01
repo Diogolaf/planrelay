@@ -157,6 +157,16 @@ You can also ask an agent to change these files for you: "agent tasks should go 
 
 In a repository with several worktrees, both files are read from the main worktree, so every agent uses the same settings.
 
+## If your project already tracks work
+
+planrelay does not change how your agents write code or which tools they use. It adds the board and a few habits that come with it: code-changing work lives in a task, the steps are kept in a checklist, a task ends with a summary or a handoff note, and an agent asks instead of guessing.
+
+If your project already has its own way to track work, such as a TODO file, a folder of handoff notes, another board or rules in `CLAUDE.md`, decide how the two should live together. Otherwise agents may record the same work twice, or follow two sets of rules.
+
+- **Replace it.** The board holds tasks and handoffs from now on. Archive the old system and remove its rules.
+- **Keep both, with a clear split.** Write in `.planrelay/rules.md` which one holds what, for example: "Tasks live on the board; `TODO.md` is no longer updated." Agents follow these rules where they differ from planrelay's own.
+- **Leave planrelay out of that project.** Install it only in the projects that use it: run the install command in each project's folder with `--scope local` (see [Install](#install)). To turn it off for a while, run `claude plugin disable planrelay@planrelay`, and `claude plugin enable planrelay@planrelay` to turn it on again. The board is kept.
+
 ## Where the data lives
 
 - **In a git repository:** in `.git/planrelay/`. All worktrees of the repository share one board. Git never commits this folder, so the board is in no commit, push or clone, and it is removed with the repository.
