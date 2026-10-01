@@ -2,6 +2,8 @@
 // Leak guard: blocks private terms from entering the repository.
 // Terms come from PLANRELAY_DENYLIST (CI secret) or a private file outside the repo
 // (PLANRELAY_DENYLIST_FILE, default ~/.planrelay-dev/denylist.txt).
+// One term per line, `#` for comments; a line starting with `!` allows a phrase that contains a term
+// (a public user name, say) while the term still blocks everything else. Allowed phrases are not entries.
 // Matches are reported by entry number, and every printed line goes through maskTerms,
 // so a private term never reaches a terminal or a CI log. File content is never printed.
 //

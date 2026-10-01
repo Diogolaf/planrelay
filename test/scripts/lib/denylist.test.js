@@ -105,6 +105,26 @@ test('matchText numbers lines from 1 and reports every entry', () => {
   ]);
 });
 
+test('parseTerms: a ! line is an allowed phrase, not a term', () => {
+  const terms = parseTerms('acme\n!AcmeCorp\n# c\nelodie');
+  assert.deepEqual(terms, ['acme', 'elodie']);
+  assert.deepEqual(terms.allowed, ['acmecorp']);
+  assert.deepEqual(parseTerms('!acmecorp'), []);
+  assert.throws(() => parseTerms('acme\n !  \n'), (err) => /line 2 /.test(err.message) && !/!/.test(err.message));
+  assert.throws(() => parseTerms('acme\n!acme\u0000corp'), /line 2 .*control character/);
+});
+
+test('matchText takes allowed phrases out, and only them', () => {
+  const terms = parseTerms('acme\n!acmecorp');
+  assert.deepEqual(matchText('AcmeCorp/planrelay', terms), []);
+  assert.deepEqual(matchText('C:/Users/acme/x', terms), [{ line: 1, term: 1 }]);
+  assert.deepEqual(matchText('AcmeCorp and acme', terms), [{ line: 1, term: 1 }]);
+  assert.deepEqual(matchText('a\nAcmeCorp\nacme', terms), [{ line: 3, term: 1 }]);
+  assert.deepEqual(matchText('ACMECORP and \u00C1cmeC\u00F6rp', parseTerms('acme\n!AcmeCorp')), []);
+  assert.deepEqual(matchText('acmecorpacmecorp', terms), []);
+  assert.deepEqual(findMatches([{ path: 'AcmeCorp/a.txt', text: 'AcmeCorp' }], terms), []);
+});
+
 test('maskTerms hides every variant of every term and keeps the rest', () => {
   const terms = parseTerms(`zorbacorp\n${NFC}\nquux-project`);
   assert.equal(maskTerms('docs/ZorbaCorp-notes.md', terms), 'docs/***-notes.md');

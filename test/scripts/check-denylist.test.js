@@ -167,6 +167,25 @@ test('an author name with a term fails, without printing the identity', () => {
   assertNoLeak(r, ['Tester', 'test@example.invalid']);
 });
 
+test('an allowed phrase passes while its term still fails (--message and the identity)', () => {
+  const { write, git, home, run } = tempRepo();
+  const list = { PLANRELAY_DENYLIST: 'acme\n!acmecorp\n' };
+  const msg = path.join(home, 'COMMIT_EDITMSG');
+  fs.writeFileSync(msg, 'docs: see AcmeCorp/planrelay\n');
+  assert.equal(run(['--message', msg], list).status, 0);
+  fs.writeFileSync(msg, 'docs: see AcmeCorp/planrelay and C:/Users/acme/x\n');
+  const r = run(['--message', msg], list);
+  assert.equal(r.status, 1, r.stderr);
+  assert.match(r.stderr, /denylist: commit message:1 matches entry #1/);
+  assertNoLeak(r, ['acme']);
+  write('a.txt', 'clean\n');
+  git('add', '.');
+  assert.equal(run(['--staged'], { ...list, GIT_AUTHOR_NAME: 'AcmeCorp' }).status, 0);
+  assert.equal(run(['--staged'], { ...list, GIT_AUTHOR_NAME: 'Acme Tester' }).status, 1);
+  fs.writeFileSync(msg, 'docs: acme\n');
+  assert.equal(run(['--message', msg], { PLANRELAY_DENYLIST: '!acmecorp\n' }).status, 1);
+});
+
 test('author and committer e-mails must be allowed addresses', () => {
   const { write, git, run } = tempRepo();
   write('a.txt', 'clean\n');

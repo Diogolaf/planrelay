@@ -227,7 +227,7 @@ If the browser tests say that Playwright's browser is missing, run `npm run setu
 
 `node scripts/acceptance.mjs [solo|pair|all]` runs the scripted acceptance: two scenarios on a throwaway recipes-app project in the temp folder, then checks on the board they leave. It starts real Claude Code sessions on your own account, so their usage counts against your plan: five short sessions for both scenarios (two for `solo`, three for `pair`), with the `haiku` model unless `--model` names another. `--keep` keeps the project and the transcripts.
 
-The leak guard reads private terms from `~/.planrelay-dev/denylist.txt` (one term per line, `#` for comments; in CI, the `PLANRELAY_DENYLIST` secret). The list is never committed, and matches are reported by entry number only.
+The leak guard reads private terms from `~/.planrelay-dev/denylist.txt` (one term per line, `#` for comments; in CI, the `PLANRELAY_DENYLIST` secret). The list is never committed, and matches are reported by entry number only. A line starting with `!` allows one phrase that contains a term, such as a public user name: the term still blocks everything else.
 Prefer single distinctive words over full paths; if you do list path fragments, add both the `\` and `/` forms. Save the list as UTF-8 (or UTF-16 with a BOM).
 
     npm run check:leaks     # the leak guard over every tracked file

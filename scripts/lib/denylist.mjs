@@ -54,23 +54,31 @@ function decodeList(bytes) {
 /**
  * Parses the private list: one term per line, blank lines and `#` comments ignored.
  * Terms are returned folded (see fold). Entry #k in reports is the k-th term here.
+ * A line starting with `!` is an allowed phrase, not a term: it does not count in entry numbers.
+ * The phrases (folded) ride along on the returned array as a non-enumerable `allowed` property,
+ * and matchText takes them out of the text before it looks for terms. That way a phrase that
+ * contains a term (a public user name, say) passes while the term still blocks everything else.
  * Error messages give line numbers only, never the term.
  * @param {string | Uint8Array} input the list as text (environment variable) or raw file bytes
- * @returns {string[]}
+ * @returns {string[] & { allowed: string[] }}
  */
 export function parseTerms(input) {
   const raw = typeof input === 'string' ? input.replace(/^\uFEFF/, '') : decodeList(input);
   const terms = [];
+  const allowed = [];
   raw.split(/\r\n|\n|\r/).forEach((line, i) => {
-    const entry = line.trim();
+    let entry = line.trim();
     if (!entry || entry.startsWith('#')) return;
     if (CONTROL.test(entry)) {
       throw new Error(`line ${i + 1} of the denylist contains a control character; save the list as UTF-8 (or UTF-16 with a BOM)`);
     }
-    const term = fold(entry);
-    if (!term) throw new Error(`line ${i + 1} of the denylist is empty once accents and invisible characters are removed`);
-    terms.push(term);
+    const isAllowed = entry.startsWith('!');
+    if (isAllowed) entry = entry.slice(1).trim();
+    const text = fold(entry);
+    if (!text) throw new Error(`line ${i + 1} of the denylist is empty once accents and invisible characters are removed`);
+    (isAllowed ? allowed : terms).push(text);
   });
+  Object.defineProperty(terms, 'allowed', { value: allowed });
   return terms;
 }
 
@@ -97,14 +105,21 @@ export function splitIdent(ident) {
 /**
  * Finds terms in a block of text, line by line (lines are numbered from 1).
  * Text and terms are both folded, so the match ignores case and accents.
+ * If `terms` carries allowed phrases (see parseTerms), their occurrences are taken out first,
+ * each replaced by a control character that no term contains, so line numbers do not change.
+ * Longer phrases go first, so a phrase inside a longer one cannot split it.
  * @param {string} text
- * @param {string[]} terms
+ * @param {string[] & { allowed?: string[] }} terms
  * @returns {{ line: number, term: number }[]} term is the 1-based entry number
  */
 export function matchText(text, terms) {
   const wanted = terms.map(fold);
   const hits = [];
-  fold(text).split(/\r?\n/).forEach((line, i) => {
+  let folded = fold(text);
+  for (const phrase of [...(terms.allowed ?? [])].map(fold).filter(Boolean).sort((a, b) => b.length - a.length)) {
+    folded = folded.replaceAll(phrase, '\u0001');
+  }
+  folded.split(/\r?\n/).forEach((line, i) => {
     wanted.forEach((term, j) => {
       if (term && line.includes(term)) hits.push({ line: i + 1, term: j + 1 });
     });
