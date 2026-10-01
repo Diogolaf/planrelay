@@ -238,9 +238,7 @@ The design is in [docs/specs/2026-09-29-v1-design.md](docs/specs/2026-09-29-v1-d
 
 ## Contributing
 
-Bug reports and ideas are welcome: open an issue. To change the code, open an issue first and agree on the change there, before you write a pull request, so that no work is wasted.
-
-Before you send a pull request, run `npm test`, and commit with your GitHub no-reply e-mail address: the repository's checks refuse any other address.
+Bug reports and ideas are welcome: open an issue. Pull requests are not accepted for now. If you have a fix in mind, describe it in the issue.
 
 ## License
 
